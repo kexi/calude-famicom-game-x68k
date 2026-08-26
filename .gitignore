@@ -1,3 +1,4 @@
 # game.nes は ?rom= 直接ブート用にコミットする
 build/
 *.o
+build-x68k/
