@@ -158,9 +158,14 @@ static void update_hopper(Enemy *e, const Player *p)
 static void update_floater(Enemy *e)
 {
     // X は動かない。上下だけ。足場パズルに使うので位置が安定している必要がある。
+    //
+    // 地面 (ENEMY_GROUND) から波のぶんだけ「上へ」動く。原作
+    // (src/enemy.s:313) が `lda #ENEMY_GROUND / sec / sbc bob_wave,y` と
+    // 引き算しているのと同じ。足し算にすると上下が裏返り、
+    // 一番低いときでも足場として届かない高さになる。
     ++e->timer;
     const int phase = (e->timer >> 1) & 63;
-    e->y = 100 + (int)kBobWave[phase];
+    e->y = ENEMY_GROUND - (int)kBobWave[phase];
 }
 
 void enemy_update(EnemyWorld *w, const Player *p)

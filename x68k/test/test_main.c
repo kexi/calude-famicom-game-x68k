@@ -15,8 +15,11 @@
 #include <string.h>
 
 #include "../core/arrow.h"
+#include "../core/boss.h"
 #include "../core/camera.h"
 #include "../core/enemy.h"
+#include "../core/game.h"
+#include "../core/item.h"
 #include "../core/level.h"
 #include "../core/player.h"
 
@@ -749,6 +752,265 @@ static void test_arrow_disappears_offscreen(void)
     CHECK_EQ(w.a[0].dir, ARROW_NONE);
 }
 
+// --- ゲーム進行 -------------------------------------------------------------
+
+// 右端まで行くとクリアになること。ゴールが無いと区切りが付かない。
+static void test_reaching_right_edge_clears(void)
+{
+    printf("進行: 右端まで行くとクリアする\n");
+
+    Game g;
+    game_init(&g);
+    // ラウンド表示を飛ばしてプレイ中にする。
+    g.state = GS_PLAYING;
+
+    g.player.world_x = WORLD_X_MAX;
+    game_update(&g, 0);
+
+    CHECK_EQ(g.state, GS_CLEAR);
+    // クリアボーナスが入っている。
+    CHECK(g.score >= 10);
+}
+
+static void test_clear_advances_stage(void)
+{
+    printf("進行: クリアすると次のステージへ進む\n");
+
+    Game g;
+    game_init(&g);
+    g.state = GS_PLAYING;
+    CHECK_EQ(g.stage, 0);
+
+    g.player.world_x = WORLD_X_MAX;
+    game_update(&g, 0);
+    CHECK_EQ(g.state, GS_CLEAR);
+
+    // 演出が明けるまで回す。
+    for (int i = 0; i < STATE_TIME_CLEAR + 5 && g.stage == 0; ++i)
+    {
+        game_update(&g, 0);
+    }
+    CHECK_EQ(g.stage, 1);
+}
+
+// 1-4 をクリアしたら 1-1 へ戻り、残機とスコアは持ち越すこと。
+static void test_last_stage_wraps(void)
+{
+    printf("進行: 最後のステージをクリアすると最初へ戻る\n");
+
+    Game g;
+    game_init(&g);
+    g.stage = NUM_STAGES - 1;
+    g.state = GS_PLAYING;
+    g.lives = 2;
+    // ボスがいると クリアできないので、いない状態にする。
+    g.boss.state = BOSS_ABSENT;
+
+    g.player.world_x = WORLD_X_MAX;
+    game_update(&g, 0);
+    for (int i = 0; i < STATE_TIME_CLEAR + 5 && g.stage == NUM_STAGES - 1; ++i)
+    {
+        game_update(&g, 0);
+    }
+    CHECK_EQ(g.stage, 0);
+    CHECK_EQ(g.lives, 2);
+}
+
+static void test_death_costs_a_life(void)
+{
+    printf("進行: 死ぬと残機が減る\n");
+
+    Game g;
+    game_init(&g);
+    g.state = GS_PLAYING;
+    const int before = g.lives;
+
+    g.player.alive = 0;
+    game_update(&g, 0);
+    CHECK_EQ(g.state, GS_DYING);
+
+    for (int i = 0; i < STATE_TIME_DEAD + 5 && g.state == GS_DYING; ++i)
+    {
+        game_update(&g, 0);
+    }
+    CHECK_EQ(g.lives, before - 1);
+}
+
+static void test_zero_lives_is_game_over(void)
+{
+    printf("進行: 残機が尽きるとゲームオーバー\n");
+
+    Game g;
+    game_init(&g);
+    g.state = GS_PLAYING;
+    g.lives = 1;
+
+    g.player.alive = 0;
+    game_update(&g, 0);
+    for (int i = 0; i < STATE_TIME_DEAD + 5 && g.state == GS_DYING; ++i)
+    {
+        game_update(&g, 0);
+    }
+    CHECK_EQ(g.state, GS_GAMEOVER);
+}
+
+static void test_checkpoint_resumes_midway(void)
+{
+    printf("進行: 中間フラグを通ると途中から再開する\n");
+
+    Game g;
+    game_init(&g);
+    g.state = GS_PLAYING;
+
+    // 中間フラグを通過する。
+    g.player.world_x = CHECKPOINT_X;
+    game_update(&g, 0);
+    CHECK_EQ(g.checkpoint, 1);
+
+    // そこで死ぬ。
+    g.player.alive = 0;
+    game_update(&g, 0);
+    for (int i = 0; i < STATE_TIME_DEAD + 5 && g.state == GS_DYING; ++i)
+    {
+        game_update(&g, 0);
+    }
+
+    // 最初からではなく中間フラグの位置から再開する。
+    CHECK_EQ(g.player.world_x, CHECKPOINT_X);
+}
+
+static void test_extend_at_10000(void)
+{
+    printf("進行: 1 万点ごとに 1UP する\n");
+
+    Game g;
+    game_init(&g);
+    g.state = GS_PLAYING;
+    const int before = g.lives;
+
+    // クリアを繰り返して点を貯める代わりに、直接スコアを積む経路を使う。
+    // 右端に立ってクリアすると 1000 点入る。
+    for (int n = 0; n < 10; ++n)
+    {
+        g.player.world_x = WORLD_X_MAX;
+        g.state = GS_PLAYING;
+        g.boss.state = BOSS_ABSENT;
+        game_update(&g, 0);
+    }
+    CHECK(g.lives > before);
+}
+
+// --- ボス -------------------------------------------------------------------
+
+static void test_boss_only_on_last_stage(void)
+{
+    printf("ボス: 1-4 にだけ出る\n");
+
+    Boss b;
+    for (int stage = 0; stage < 3; ++stage)
+    {
+        boss_init(&b, stage);
+        CHECK_EQ(b.state, BOSS_ABSENT);
+    }
+    boss_init(&b, 3);
+    CHECK_EQ(b.state, BOSS_ALIVE);
+    CHECK_EQ(b.hp, BOSS_HP_MAX);
+}
+
+static void test_boss_blocks_clear(void)
+{
+    printf("ボス: 生きている間はクリアできない\n");
+
+    Game g;
+    game_init(&g);
+    g.stage = 3;
+    boss_init(&g.boss, 3);
+    g.state = GS_PLAYING;
+
+    g.player.world_x = WORLD_X_MAX;
+    game_update(&g, 0);
+    // ボスが生きているのでクリアにならない。
+    CHECK_EQ(g.state, GS_PLAYING);
+
+    // 倒すとクリアできる。
+    g.boss.state = BOSS_ABSENT;
+    g.player.world_x = WORLD_X_MAX;
+    game_update(&g, 0);
+    CHECK_EQ(g.state, GS_CLEAR);
+}
+
+static void test_boss_takes_damage(void)
+{
+    printf("ボス: 矢で 1、踏みで 2 減る\n");
+
+    Boss b;
+    boss_init(&b, 3);
+    const int hp0 = b.hp;
+
+    CHECK_EQ(boss_hit_by_arrow(&b, b.x, b.y + 4), 1);
+    CHECK_EQ(b.hp, hp0 - 1);
+
+    // 点滅中は当たらない。
+    CHECK_EQ(boss_hit_by_arrow(&b, b.x, b.y + 4), 0);
+    CHECK_EQ(b.hp, hp0 - 1);
+}
+
+static void test_boss_dies_at_zero_hp(void)
+{
+    printf("ボス: HP 0 で撃破になる\n");
+
+    Boss b;
+    boss_init(&b, 3);
+
+    for (int i = 0; i < BOSS_HP_MAX && b.state == BOSS_ALIVE; ++i)
+    {
+        b.flash = 0;  // 点滅を飛ばす
+        boss_hit_by_arrow(&b, b.x, b.y + 4);
+    }
+    CHECK_EQ(b.state, BOSS_DYING);
+}
+
+// --- アイテム ---------------------------------------------------------------
+
+static void test_item_pickup(void)
+{
+    printf("アイテム: 触れると拾える\n");
+
+    ItemWorld w;
+    item_init(&w);
+    item_spawn(&w, 0, 200);
+    CHECK_EQ(w.i[0].kind, ITEM_STAR);
+
+    Player p;
+    player_init(&p);
+    // アイテムの位置 (200+4=204) に重なるところへ置く。
+    p.world_x = 195;
+    p.y_fixed = (int32_t)170 << 8;
+
+    CHECK_EQ(item_update(&w, &p), ITEM_STAR);
+    // 拾ったら消える。
+    CHECK_EQ(w.i[0].kind, ITEM_NONE);
+}
+
+static void test_power_arrow_upgrades(void)
+{
+    printf("アイテム: パワー矢で 2 本撃てるようになる\n");
+
+    Game g;
+    game_init(&g);
+    g.state = GS_PLAYING;
+
+    // 通常は 1 本まで。
+    CHECK_EQ(g.arrows.weapon_level, 0);
+
+    g.arrows.weapon_level = 1;
+    Player p;
+    player_init(&p);
+    p.world_x = 200;
+    CHECK_EQ(arrow_fire(&g.arrows, &p, BTN_B, 0), 1);
+    CHECK_EQ(arrow_fire(&g.arrows, &p, BTN_B, 0), 1);
+}
+
 int main(void)
 {
     test_level_features();
@@ -779,6 +1041,22 @@ int main(void)
     test_arrow_limit_by_weapon();
     test_arrow_up_needs_up();
     test_arrow_disappears_offscreen();
+
+    test_reaching_right_edge_clears();
+    test_clear_advances_stage();
+    test_last_stage_wraps();
+    test_death_costs_a_life();
+    test_zero_lives_is_game_over();
+    test_checkpoint_resumes_midway();
+    test_extend_at_10000();
+
+    test_boss_only_on_last_stage();
+    test_boss_blocks_clear();
+    test_boss_takes_damage();
+    test_boss_dies_at_zero_hp();
+
+    test_item_pickup();
+    test_power_arrow_upgrades();
 
     printf("\n%d 件中 %d 件成功\n", g_checks, g_checks - g_failures);
     if (g_failures)

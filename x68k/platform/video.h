@@ -32,7 +32,16 @@ void video_put_enemy(int slot, int x, int y, int type, int hardened);
 // 矢を置く。
 void video_put_arrow(int slot, int x, int y, int dir);
 
+// アイテムを置く。
+void video_put_item(int slot, int x, int y, int kind);
+
+// ボスを置く。32x32 = スプライト 4 枚。
+void video_put_boss(int x, int y, int flashing);
+
 // 使わなかったスプライトを消す。毎フレーム最後に呼ぶ。
 void video_hide_from(int first_index);
+
+// ステージを切り替える。BG を組み直す。
+void video_set_stage(int stage);
 
 #endif  // CALUDE_PLATFORM_VIDEO_H

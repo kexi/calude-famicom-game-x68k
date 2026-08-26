@@ -57,7 +57,7 @@ build-hello:
 #
 # core/ はプラットフォーム非依存、platform/ が X68000 のハードを叩く。
 # アセットは tools/ が生成した .inc.c を混ぜる。
-game_srcs := "x68k/platform/crt0.S x68k/platform/main.c x68k/platform/video.c x68k/platform/input.c x68k/core/level.c x68k/core/player.c x68k/core/enemy.c x68k/core/arrow.c x68k/assets/levels.inc.c"
+game_srcs := "x68k/platform/crt0.S x68k/platform/main.c x68k/platform/video.c x68k/platform/input.c x68k/core/level.c x68k/core/player.c x68k/core/enemy.c x68k/core/arrow.c x68k/core/item.c x68k/core/boss.c x68k/core/game.c x68k/assets/levels.inc.c"
 
 [doc('アセット (レベル・フォント) を生成する')]
 assets:
@@ -127,8 +127,23 @@ test:
     clang -std=c17 -O1 -g -Wall -Wextra -Werror \
       -o {{build}}/test x68k/test/test_main.c x68k/core/level.c \
       x68k/core/player.c x68k/core/enemy.c x68k/core/arrow.c \
+      x68k/core/item.c x68k/core/boss.c x68k/core/game.c \
       x68k/assets/levels.inc.c
     ./{{build}}/test
+
+# 全ステージが本当にクリアできるかを探索で確かめる。
+#
+# 「遊べる」の最低条件は、詰まずに最後まで行けること。手で台本を書いて
+# 失敗したとき、それが「ゲームが詰んでいる」のか「台本が下手」なのかは
+# 区別できない。探索させれば区別が付く。
+[doc('全ステージ + ボスが通せることを探索で確かめる')]
+solve:
+    mkdir -p {{build}}
+    clang -std=c17 -O2 -Wall -Wextra -o {{build}}/solve \
+      x68k/test/solve.c x68k/core/level.c x68k/core/player.c \
+      x68k/core/enemy.c x68k/core/arrow.c x68k/core/item.c \
+      x68k/core/boss.c x68k/core/game.c x68k/assets/levels.inc.c
+    ./{{build}}/solve
 
 [doc('エミュレータ上で実際に動かして状態を検査する')]
 e2e: build

@@ -21,6 +21,8 @@
 #define PAT_ARROW_V 8
 #define PAT_ENEMY_STONE 9
 #define PAT_BAT_STONE 10
+#define PAT_ITEM 11
+#define PAT_BOSS 12
 
 // パレットブロック 0 の色番号。
 #define COL_TRANSPARENT 0
@@ -33,6 +35,8 @@
 #define COL_ENEMY 7
 #define COL_STONE 8
 #define COL_ARROW 9
+#define COL_ITEM 10
+#define COL_BOSS 11
 
 // X68000 のパレットは GRB555 + 下位 1bit が輝度。
 // 上位から G(5) R(5) B(5) I(1) の順に詰める。
@@ -54,6 +58,8 @@ static void set_palette(void)
     poke16(VC_TEXT_PALETTE + COL_ENEMY * 2, grb(26, 6, 20));
     poke16(VC_TEXT_PALETTE + COL_STONE * 2, grb(16, 16, 16));
     poke16(VC_TEXT_PALETTE + COL_ARROW * 2, grb(30, 28, 20));
+    poke16(VC_TEXT_PALETTE + COL_ITEM * 2, grb(31, 31, 6));
+    poke16(VC_TEXT_PALETTE + COL_BOSS * 2, grb(31, 4, 10));
 }
 
 // 16x16 パターンを 1 色で塗る。
@@ -237,6 +243,34 @@ static void build_actor_patterns(void)
     }
 }
 
+// アイテムとボスのパターン。
+static void build_extra_patterns(void)
+{
+    // アイテム: 星形に近い菱形。種類ごとの描き分けはしない
+    // (色を変えるにはパレットブロックが要り、このエミュレータでは使えない)。
+    fill_pattern(PAT_ITEM, COL_TRANSPARENT);
+    for (int y = 0; y < 16; ++y)
+    {
+        const int half = (y < 8) ? y : (15 - y);
+        for (int x = 7 - half; x <= 8 + half; ++x)
+        {
+            if (x >= 0 && x < 16)
+            {
+                set_pattern_pixel(PAT_ITEM, x, y, COL_ITEM);
+            }
+        }
+    }
+
+    // ボス: 大きめの四角に目。32x32 を 16x16 x4 で組むが、
+    // パターンは 1 つを使い回して 4 枚並べる。
+    fill_pattern(PAT_BOSS, COL_BOSS);
+    for (int i = 0; i < 16; ++i)
+    {
+        set_pattern_pixel(PAT_BOSS, i, 0, COL_TRANSPARENT);
+        set_pattern_pixel(PAT_BOSS, 0, i, COL_TRANSPARENT);
+    }
+}
+
 // BG のセルに 1 個書く。
 //
 // ネームテーブルのワードはスプライトの属性と同じ形式
@@ -355,6 +389,37 @@ void video_put_arrow(int slot, int x, int y, int dir)
     poke16(base + 6, 3);
 }
 
+void video_put_item(int slot, int x, int y, int kind)
+{
+    (void)kind;
+    const uint32_t base = SPR_REG_BASE + (uint32_t)(7 + slot) * 8u;
+    poke16(base + 0, (uint16_t)(x + SPR_COORD_OFFSET));
+    poke16(base + 2, (uint16_t)(y + SPR_COORD_OFFSET));
+    poke16(base + 4, (uint16_t)PAT_ITEM);
+    poke16(base + 6, 3);
+}
+
+void video_put_boss(int x, int y, int flashing)
+{
+    // 32x32 はスプライト 4 枚。被弾中は 2 フレームに 1 回消して点滅させる。
+    for (int i = 0; i < 4; ++i)
+    {
+        const int dx = (i & 1) * 16;
+        const int dy = (i >> 1) * 16;
+        const uint32_t base = SPR_REG_BASE + (uint32_t)(9 + i) * 8u;
+        poke16(base + 0, (uint16_t)(x + dx + SPR_COORD_OFFSET));
+        poke16(base + 2, (uint16_t)(y + dy + SPR_COORD_OFFSET));
+        poke16(base + 4, (uint16_t)PAT_BOSS);
+        poke16(base + 6, (uint16_t)(flashing ? 0 : 3));
+    }
+}
+
+void video_set_stage(int stage)
+{
+    level_set_stage(stage);
+    video_build_stage();
+}
+
 void video_hide_from(int first_index)
 {
     // プライオリティ 0 は非表示。
@@ -369,6 +434,7 @@ void video_init(void)
     set_palette();
     build_patterns();
     build_actor_patterns();
+    build_extra_patterns();
 
     // BG0 を表示し、ネームテーブル 0 を使う。
     // bit0 = BG0 表示、bit1 = BG0 のネームテーブル番号。
