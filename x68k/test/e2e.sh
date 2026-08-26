@@ -1,73 +1,94 @@
 #!/usr/bin/env bash
-# エミュレータ上で実際に動かし、状態の出力を期待値と突き合わせる。
+# エミュレータ上で実際に動かし、画面に何が出ているかを確かめる。
 #
-# ネイティブテスト (x68k/test/test_main.c) はロジックだけを見る。
-# こちらは「68000 のコードとして正しく動き、キー入力が届き、
-# 画面の初期化が通る」ところまでを見る。両方が要る。
+# 3 層の検証のうち、これが一番外側:
+#   just test   ゲームの規則 (ホストで直接)
+#   just solve  全ステージが通せるか (探索)
+#   just e2e    68000 のコードとして動き、絵が出るか  <- ここ
 #
-# ゲームは 30 フレームごとに
-# "XXXX YYYY 接地 生存 ステージ 残機 状態 スコア" を DOS _PRINT で出す。
-# --dump-text はテキスト画面を CGROM の字形と照合して ASCII へ逆引きする。
-# 改行が落ちてレコードが繋がり、先頭側の空白も 1 つ詰まるので、
-# 見えるのは "012000168 1 100030..." のような並びになる。
-# 期待値は実際に出た並びをそのまま使う。
+# なぜ画面の絵 (PPM) を見るか: 以前はテキスト画面を --dump-text で
+# 読み戻していたが、HUD を自前の字形で描くようにしたので、CGROM との
+# 照合による逆引きに引っかからなくなった。絵が出ているかを見たいなら、
+# 絵そのものを見る方が直接的で、「文字が読めるか」という別の問題に
+# 巻き込まれない。
 set -euo pipefail
 
 emu="${X68K_STACKCHAN:-$(dirname "$0")/../../../x68k-stackchan}"
 build="${BUILD_DIR:-build-x68k}"
+here="$(cd "$(dirname "$0")/../.." && pwd)"
 
-# テキスト画面を 1 本の文字列にして返す。行番号の桁は落とす。
-run_game() {
-    local keys="$1"
+shot() {
+    local out="$1" cycles="$2"
+    shift 2
     "$emu/build-host/x68k-run" \
         --iplrom "$emu/rom/iplrom.dat" \
         --hdd "$build/disk.hdf" \
-        --cycles 900000000 --event-driven \
-        --keys "$keys" --dump-text 2>/dev/null |
-        sed -n '/A>game/,/^----/p' | sed 's/^ *[0-9]*|//' | tr -d '\n\r'
+        --cycles "$cycles" --event-driven \
+        --keys $'game\n' "$@" --ppm "$out" >/dev/null 2>&1
 }
 
 fail=0
-check() {
-    local name="$1" haystack="$2" needle="$3"
-    if [[ "$haystack" == *"$needle"* ]]; then
-        echo "  ok   $name"
-    else
-        echo "  FAIL $name"
-        echo "       期待した並び: $needle"
-        fail=1
-    fi
-}
 
-echo "e2e: 起動して初期状態になる"
-out=$(run_game $'game\n')
-check "挨拶が出る" "$out" "CALUDE KODO X68000"
-# 初期状態は x=120 y=168 で接地・生存。
-check "初期位置 x=120 y=168 接地 生存 ステージ1 残機3" "$out" "012000168 1 1 1 3"
+echo "e2e: 起動して 1-1 の画面が出る"
+shot /tmp/e2e-boot.ppm 600000000
+if ! python3 "$here/x68k/tools/checkppm.py" /tmp/e2e-boot.ppm \
+    --expect player,ground,block,hud; then
+    fail=1
+fi
 
-echo "e2e: d キーで右へ動く"
-out=$(run_game $'game\nddddddddddddddddddddd')
-check "右へ移動している" "$out" "019200168 1 1 1 3"
+echo "e2e: ジャンプすると位置が変わる"
+# 入力台本でジャンプさせ、跳んでいる最中を撮る。
+# 跳んでいる最中を狙う。台本は 455M サイクルで押し始めるので、
+# その少し後が一番高い。
+shot /tmp/e2e-jump.ppm 456000000 --input-script "$here/x68k/test/jump.script"
+if ! python3 "$here/x68k/tools/checkppm.py" /tmp/e2e-jump.ppm --expect player,ground; then
+    fail=1
+fi
 
-echo "e2e: ジャンプする"
-# --keys ではなく入力台本を使う。
+# 跳んでいることを、プレイヤーの縦位置で確かめる。
 #
-# Why: --keys は「文字を等間隔で 1 つずつ打つ」ので、押しっぱなしにできず、
-# ラウンド表示 (操作を受け付けない時間) が明ける前に打ち終わってしまう。
-# サイクルを指定できる台本なら、始まった直後を狙って押し続けられる。
-out=$("$emu/build-host/x68k-run" \
-    --iplrom "$emu/rom/iplrom.dat" \
-    --hdd "$build/disk.hdf" \
-    --cycles 480000000 --event-driven \
-    --keys $'game\n' --input-script x68k/test/jump.script --dump-text 2>/dev/null |
-    sed -n '/A>game/,/^----/p' | sed 's/^ *[0-9]*|//' | tr -d '\n\r')
+# 立っているときと跳んでいるときで、肌の色が出る一番上の行が変わる。
+# 「絵が出ている」だけでは動いていることの証明にならないので、
+# 動いた結果として位置が変わることまで見る。
+top_standing=$(python3 - "$here" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1] + "/x68k/tools")
+from pathlib import Path
+src = (Path(sys.argv[1]) / "x68k/tools/checkppm.py").read_text()
+exec(src.split("def main")[0])
+w, h, px = read_ppm(Path("/tmp/e2e-boot.ppm"))
+skin = COLORS["skin"]
+for y in range(16, 240):
+    row = y * w * 3
+    for x in range(256):
+        o = row + x * 3
+        if (px[o], px[o+1], px[o+2]) == skin:
+            print(y); sys.exit(0)
+print(-1)
+PY
+)
+top_jumping=$(python3 - "$here" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1] + "/x68k/tools")
+from pathlib import Path
+src = (Path(sys.argv[1]) / "x68k/tools/checkppm.py").read_text()
+exec(src.split("def main")[0])
+w, h, px = read_ppm(Path("/tmp/e2e-jump.ppm"))
+skin = COLORS["skin"]
+for y in range(16, 240):
+    row = y * w * 3
+    for x in range(256):
+        o = row + x * 3
+        if (px[o], px[o+1], px[o+2]) == skin:
+            print(y); sys.exit(0)
+print(-1)
+PY
+)
 
-# 跳んでいるフレームは y が地上の 168 より小さく、接地フラグが 0。
-if [[ "$out" =~ 01[0-6][0-9]\ 0\ 1 ]]; then
-    echo "  ok   空中に居るフレームがある"
+if [[ "$top_jumping" -ge 0 && "$top_standing" -ge 0 && "$top_jumping" -lt "$top_standing" ]]; then
+    echo "  ok   跳んでいる (立ち y=$top_standing -> 跳び y=$top_jumping)"
 else
-    echo "  FAIL 空中に居るフレームがある"
-    echo "       y<170 かつ接地=0 のレコードが無い"
+    echo "  FAIL 跳んでいない (立ち y=$top_standing 跳び y=$top_jumping)"
     fail=1
 fi
 

@@ -15,6 +15,7 @@
 
 #include "../core/game.h"
 #include "audio.h"
+#include "hud.h"
 #include "hw.h"
 #include "input.h"
 #include "video.h"
@@ -45,67 +46,6 @@ static void wait_vsync(void)
     }
 }
 
-// 状態を機械が読める形で出す。
-//
-// なぜ画面へ直接ドットを書かないか: --dump-text はテキスト画面のセルを
-// CGROM の字形と照合して ASCII へ逆引きする。自前のビットマップを
-// 置いても字形が一致せず、全部 '#' になって読めない。
-// DOS _PRINT なら実物の IOCS が字を描くので、逆引きがそのまま通る。
-
-// 状態の出力を続けるか。埋まったら止める。
-static int g_report_enabled = 1;
-
-// 10 進へ直す。除算命令を使わない。
-//
-// Why not value % 10 / value /= 10 と書かないか: 68000 に 32bit の
-// 除算命令が無いため、gcc は libgcc の __divsi3 / __modsi3 を呼ぶ。
-// -nostdlib のこのバイナリでは、それを持ち込むと再配置とセクション配置の
-// 面倒が増える。桁数はたかだか 4 なので、引き算で足りる。
-static void put_num(char *buf, int value, int digits)
-{
-    static const int kPow10[5] = {1, 10, 100, 1000, 10000};
-
-    if (value < 0)
-    {
-        value = 0;
-    }
-
-    for (int i = 0; i < digits; ++i)
-    {
-        const int unit = kPow10[digits - 1 - i];
-        int d = 0;
-        while (value >= unit && d < 9)
-        {
-            value -= unit;
-            ++d;
-        }
-        buf[i] = (char)('0' + d);
-    }
-}
-
-// 並び: world_x(4) y(4) 接地(1) 生存(1) ステージ(1) 残機(1) 状態(1) スコア(4)
-static void report_state(const Game *g)
-{
-    static char line[] = "0000 0000 0 0 0 0 0 0000\r\n";
-
-    int y = player_y(&g->player);
-    if (y < 0)
-    {
-        y = 0;
-    }
-
-    put_num(line + 0, (int)g->player.world_x, 4);
-    put_num(line + 5, y, 4);
-    line[10] = (char)('0' + g->player.on_ground);
-    line[12] = (char)('0' + g->player.alive);
-    line[14] = (char)('0' + g->stage + 1);
-    line[16] = (char)('0' + (g->lives > 9 ? 9 : g->lives));
-    line[18] = (char)('0' + g->state);
-    put_num(line + 20, (int)g->score, 4);
-
-    _dos_print(line);
-}
-
 int main(void)
 {
     // ハードウェアを直に叩くのでスーパーバイザへ移る。
@@ -118,11 +58,10 @@ int main(void)
 
     video_init();
     audio_init();
+    hud_clear();
     video_set_stage(game.stage);
 
     int shown_stage = game.stage;
-    int report_tick = 0;
-    int report_count = 0;
 
     for (;;)
     {
@@ -209,23 +148,9 @@ int main(void)
         // 音は絵と同じタイミングで反映する。
         audio_commit(&sound);
 
-        // 10 フレームごとに 1 回、状態を出す。
-        //
-        // Why not 30 フレームか: ジャンプの滞空は約 20 フレームなので、
-        // 30 フレーム間隔だと跳んでいる最中を一度も捉えられないことがある。
-        // 自動検証で「跳んだ」を確かめるには、滞空より短い間隔が要る。
-        //
-        // ずっと出し続けるとテキスト画面が埋まる。自動検証に要るのは
-        // 最初の数十秒ぶんなので、そこで止める。画面は消さない
-        // (消すと --dump-text で何も読めなくなり、検証できなくなる)。
-        if (g_report_enabled && ++report_tick >= 10)
-        {
-            report_tick = 0;
-            report_state(&game);
-            if (++report_count >= 200)
-            {
-                g_report_enabled = 0;
-            }
-        }
+        hud_draw(&game);
+
+        // 自動検証用の 1 行。HUD と同じくテキスト画面へ直接書く。
+        hud_debug_line(&game);
     }
 }
