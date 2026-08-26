@@ -35,7 +35,7 @@ default:
 # 実行ファイルに GOT は無いので、実行時に GOT を引いた先が全部 0 になり、
 # 関数ポインタが 0 になって「PC=$000002 で halt」という形で落ちる。
 # X 形式は再配置表で絶対番地を直す仕組みなので、PIC は不要かつ有害。
-cflags := "-m68000 -O2 -fomit-frame-pointer -ffreestanding -nostdlib -fno-builtin -fno-common -fno-pic -fno-PIC -Wall -Wextra"
+cflags := "-m68000 -O2 -fomit-frame-pointer -ffreestanding -nostdlib -fno-builtin -fno-common -fno-pic -fno-PIC -fno-stack-protector -Wall -Wextra"
 
 # リンクは gcc ではなく ld を直に呼ぶ。
 #
@@ -52,6 +52,35 @@ build-hello:
     {{cross}}-ld --emit-relocs -n -T x68k/ld/game.ld \
       -o {{build}}/hello.elf {{build}}/crt0.o {{build}}/hello.o
     python3 x68k/tools/elf2x.py {{build}}/hello.elf {{build}}/HELLO.X
+
+# ゲーム本体をビルドする。
+#
+# core/ はプラットフォーム非依存、platform/ が X68000 のハードを叩く。
+# アセットは tools/ が生成した .inc.c を混ぜる。
+game_srcs := "x68k/platform/crt0.S x68k/platform/main.c x68k/platform/video.c x68k/platform/input.c x68k/core/level.c x68k/core/player.c x68k/assets/levels.inc.c"
+
+[doc('アセット (レベル・フォント) を生成する')]
+assets:
+    python3 x68k/tools/mklevels.py assets/levels.s x68k/assets/levels.inc.c
+
+[doc('ゲーム本体 (GAME.X) をビルドする')]
+build: assets
+    mkdir -p {{build}}
+    for f in {{game_srcs}}; do \
+      o={{build}}/$(basename $f | tr '.' '_').o; \
+      {{cross}}-gcc {{cflags}} -c $f -o $o || exit 1; \
+    done
+    {{cross}}-ld --emit-relocs -n -T x68k/ld/game.ld \
+      -o {{build}}/game.elf {{build}}/*_S.o {{build}}/*_c.o \
+      $({{cross}}-gcc -m68000 -print-libgcc-file-name)
+    python3 x68k/tools/elf2x.py {{build}}/game.elf {{build}}/GAME.X
+
+[doc('ゲームをエミュレータで走らせる')]
+run *ARGS: build
+    just image {{build}}/GAME.X
+    {{emu}}/build-host/x68k-run --iplrom {{emu}}/rom/iplrom.dat \
+      --hdd {{build}}/disk.hdf --cycles 900000000 --event-driven \
+      --keys $'game\n' {{ARGS}}
 
 # ───── ディスクイメージと実行 ──────────────────────────────────────────────
 
@@ -74,15 +103,38 @@ run-hello: build-hello
       --hdd {{build}}/disk.hdf --cycles 900000000 --event-driven \
       --keys $'hello\n' --dump-text
 
+# ───── テスト ──────────────────────────────────────────────────────────────
+
+# core/ はプラットフォーム非依存の C なので、ホストの clang でそのまま
+# ビルドしてテストできる。68000 に載せてエミュレータで回すより桁違いに速く、
+# 失敗が「ロジックの誤り」か「載せ方の誤り」かを切り分けられる。
+[doc('core/ のホストネイティブテストを実行する')]
+test:
+    mkdir -p {{build}}
+    clang -std=c17 -O1 -g -Wall -Wextra -Werror \
+      -o {{build}}/test x68k/test/test_main.c x68k/core/level.c \
+      x68k/core/player.c x68k/assets/levels.inc.c
+    ./{{build}}/test
+
+[doc('エミュレータ上で実際に動かして状態を検査する')]
+e2e: build
+    just image {{build}}/GAME.X
+    X68K_STACKCHAN={{emu}} BUILD_DIR={{build}} bash x68k/test/e2e.sh
+
 # ───── lint / format ───────────────────────────────────────────────────────
 
+# 生成物 (*.inc.c) は対象から外す。
+#
+# Why: 形は生成側 (tools/) が決めている。整形器に通すと、生成した直後に
+# 差分が出る状態になり、「生成し直したのに差分が出る」の意味が
+# 「データが変わった」なのか「整形が違う」なのか区別できなくなる。
 [doc('C とアセンブラを整形する')]
 fmt:
-    fd -e c -e h . x68k --exec clang-format -i
+    fd -e c -e h -E '*.inc.c' . x68k --exec clang-format -i
 
 [doc('整形されているかを検査する (書き換えない)')]
 fmt-check:
-    fd -e c -e h . x68k --exec clang-format --dry-run --Werror
+    fd -e c -e h -E '*.inc.c' . x68k --exec clang-format --dry-run --Werror
 
 [doc('シークレットスキャンを全履歴に対して回す')]
 gitleaks:

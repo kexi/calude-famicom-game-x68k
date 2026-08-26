@@ -1,0 +1,23 @@
+# 狩人行動 X68000 版のコード整形規則。
+#
+# x68k-stackchan (エミュレータ側) と同じ見た目に揃える。両方を行き来しながら
+# 書くので、片方だけ見た目が違うと差分が読みにくくなる。
+# Allman ブレース + 4 スペース + 100 桁。
+---
+Language: Cpp
+BasedOnStyle: Google
+
+BreakBeforeBraces: Allman
+
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+
+ColumnLimit: 100
+
+# ポインタは型ではなく変数に寄せる (int *p)。
+DerivePointerAlignment: false
+PointerAlignment: Right
+
+# include の並べ替えはする。グループの順序は Google の既定に従う。
+SortIncludes: true
