@@ -22,6 +22,7 @@
 #include "../core/item.h"
 #include "../core/level.h"
 #include "../core/player.h"
+#include "../core/sound.h"
 
 static int g_checks = 0;
 static int g_failures = 0;
@@ -1011,6 +1012,124 @@ static void test_power_arrow_upgrades(void)
     CHECK_EQ(arrow_fire(&g.arrows, &p, BTN_B, 0), 1);
 }
 
+// --- 音 ---------------------------------------------------------------------
+
+static void test_sequencer_advances(void)
+{
+    printf("音: シーケンサがテンポどおりに進む\n");
+
+    Sound s;
+    sound_init(&s);
+    s.tempo = 8;
+
+    SoundFrame f;
+    // 8 フレームで 1 ステップ進む。
+    for (int i = 0; i < 7; ++i)
+    {
+        sound_update(&s, &f);
+        CHECK_EQ(s.step, 0);
+    }
+    sound_update(&s, &f);
+    CHECK_EQ(s.step, 1);
+}
+
+static void test_stage_tempo(void)
+{
+    printf("音: ステージごとにテンポが変わる\n");
+
+    Sound s;
+    sound_init(&s);
+
+    sound_set_stage(&s, 0);
+    const int t0 = s.tempo;
+    sound_set_stage(&s, 3);
+    const int t3 = s.tempo;
+
+    // 後のステージほど速い = 1 ステップのフレーム数が小さい。
+    CHECK(t3 < t0);
+}
+
+static void test_drums_play(void)
+{
+    printf("音: ドラムのパターンが鳴る\n");
+
+    Sound s;
+    sound_init(&s);
+    s.tempo = 1;  // 毎フレーム 1 ステップ進める
+
+    SoundFrame f;
+    int kicks = 0;
+    int hats = 0;
+    for (int i = 0; i < 16; ++i)
+    {
+        sound_update(&s, &f);
+        if (f.drum == DRUM_KICK)
+        {
+            ++kicks;
+        }
+        if (f.drum == DRUM_HIHAT)
+        {
+            ++hats;
+        }
+    }
+    // 16 ステップの中にキックもハットもある。
+    CHECK(kicks > 0);
+    CHECK(hats > 0);
+}
+
+static void test_sfx_priority(void)
+{
+    printf("音: 重い効果音は軽い効果音に消されない\n");
+
+    Sound s;
+    sound_init(&s);
+
+    // 撃破音を鳴らしている間に、ジャンプ音で上書きされないこと。
+    sound_play_sfx(&s, SFX_DEFEAT);
+    CHECK_EQ(s.sfx, SFX_DEFEAT);
+    sound_play_sfx(&s, SFX_JUMP);
+    CHECK_EQ(s.sfx, SFX_DEFEAT);
+
+    // 逆に、より重い音は上書きできる。
+    sound_play_sfx(&s, SFX_DEATH);
+    CHECK_EQ(s.sfx, SFX_DEATH);
+}
+
+static void test_sfx_uses_own_voice(void)
+{
+    printf("音: 効果音は BGM と別の ch を使う\n");
+
+    Sound s;
+    sound_init(&s);
+    sound_play_sfx(&s, SFX_JUMP);
+
+    SoundFrame f;
+    sound_update(&s, &f);
+
+    // 効果音の ch でキーオンが立ち、BGM の ch は触られない。
+    //
+    // 原作は APU の ch が足りず、BGM が書いた後から上書きして
+    // 毎フレーム再主張していた。8ch あればその工夫は要らない。
+    CHECK_EQ(f.key_on[VOICE_SFX], 1);
+    CHECK_EQ(f.key_on[VOICE_BASS], 0);
+}
+
+static void test_game_plays_jump_sfx(void)
+{
+    printf("音: ジャンプすると効果音が鳴る\n");
+    level_set_stage(0);
+
+    Game g;
+    game_init(&g);
+    g.state = GS_PLAYING;
+    g.player.world_x = 1 * 16;
+
+    SoundFrame f;
+    game_update_with_sound(&g, BTN_A, &f);
+
+    CHECK_EQ(g.sound.sfx, SFX_JUMP);
+}
+
 int main(void)
 {
     test_level_features();
@@ -1057,6 +1176,13 @@ int main(void)
 
     test_item_pickup();
     test_power_arrow_upgrades();
+
+    test_sequencer_advances();
+    test_stage_tempo();
+    test_drums_play();
+    test_sfx_priority();
+    test_sfx_uses_own_voice();
+    test_game_plays_jump_sfx();
 
     printf("\n%d 件中 %d 件成功\n", g_checks, g_checks - g_failures);
     if (g_failures)

@@ -14,6 +14,7 @@
 #include <stdint.h>
 
 #include "../core/game.h"
+#include "audio.h"
 #include "hw.h"
 #include "input.h"
 #include "video.h"
@@ -116,6 +117,7 @@ int main(void)
     game_init(&game);
 
     video_init();
+    audio_init();
     video_set_stage(game.stage);
 
     int shown_stage = game.stage;
@@ -126,7 +128,8 @@ int main(void)
     {
         const uint8_t buttons = input_read();
 
-        game_update(&game, buttons);
+        SoundFrame sound;
+        game_update_with_sound(&game, buttons, &sound);
 
         // ステージが変わったら BG を組み直す。
         if (game.stage != shown_stage)
@@ -202,6 +205,9 @@ int main(void)
         }
 
         video_hide_from(13);
+
+        // 音は絵と同じタイミングで反映する。
+        audio_commit(&sound);
 
         // 10 フレームごとに 1 回、状態を出す。
         //

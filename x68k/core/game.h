@@ -16,6 +16,7 @@
 #include "item.h"
 #include "player.h"
 #include "rules.h"
+#include "sound.h"
 
 #define NUM_STAGES 4
 
@@ -57,6 +58,7 @@ typedef struct
     ArrowWorld arrows;
     ItemWorld items;
     Boss boss;
+    Sound sound;
 
     // 無敵の残り。2 フレームに 1 減るので、255 で約 8.5 秒。
     int star_timer;
@@ -75,7 +77,12 @@ void game_init(Game *g);
 // 時間を使った。ステージは初期化と一緒に決める形にする。
 void game_start_at(Game *g, int stage);
 
-// 1 フレーム進める。画面へ反映するのは呼ぶ側。
+// 1 フレーム進める。画面と音へ反映するのは呼ぶ側。
+//
+// sound は「このフレームで鳴らすもの」を受け取る。NULL でもよい。
+void game_update_with_sound(Game *g, uint8_t buttons, SoundFrame *sound);
+
+// 音を要らないときの糖衣。
 void game_update(Game *g, uint8_t buttons);
 
 // いま表示すべきスクロール量。

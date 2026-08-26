@@ -48,6 +48,7 @@ static void start_stage(Game *g)
     item_init(&g->items);
     boss_init(&g->boss, g->stage);
     g->star_timer = 0;
+    sound_set_stage(&g->sound, g->stage);
 
     if (g->checkpoint)
     {
@@ -79,6 +80,7 @@ void game_init(Game *g)
     g->checkpoint = 0;
     g->prev_buttons = 0;
     g->frame = 0;
+    sound_init(&g->sound);
     start_stage(g);
 }
 
@@ -172,9 +174,20 @@ static void check_clear(Game *g)
     add_score(g, SCORE_CLEAR);
 }
 
-void game_update(Game *g, uint8_t buttons)
+void game_update(Game *g, uint8_t buttons) { game_update_with_sound(g, buttons, NULL); }
+
+void game_update_with_sound(Game *g, uint8_t buttons, SoundFrame *sound)
 {
     ++g->frame;
+
+    // 音は必ず 1 フレーム進める。
+    //
+    // Why 先に進めるか: この関数は演出中や hitstop 中に早期 return する。
+    // 後ろでまとめて進めると、その経路で音が止まってしまう。
+    // BGM は世界が止まっていても流れ続けるのが自然。
+    SoundFrame local;
+    SoundFrame *sf = (sound != NULL) ? sound : &local;
+    sound_update(&g->sound, sf);
 
     // 演出中は世界を動かさない。
     if (g->state != GS_PLAYING)
@@ -203,8 +216,17 @@ void game_update(Game *g, uint8_t buttons)
     hooks.platform_under = hook_platform;
     hooks.user = &g->enemies;
 
+    const uint8_t was_on_ground = g->player.on_ground;
     player_update(&g->player, buttons, g->prev_buttons, &hooks);
-    arrow_fire(&g->arrows, &g->player, buttons, g->prev_buttons);
+    // 接地から離れた = 跳んだ。
+    if (was_on_ground && !g->player.on_ground && g->player.vel_y < 0)
+    {
+        sound_play_sfx(&g->sound, SFX_JUMP);
+    }
+    if (arrow_fire(&g->arrows, &g->player, buttons, g->prev_buttons))
+    {
+        sound_play_sfx(&g->sound, SFX_SHOT);
+    }
 
     const int32_t scroll = game_scroll(g);
     arrow_update(&g->arrows, scroll);
@@ -221,6 +243,7 @@ void game_update(Game *g, uint8_t buttons)
         {
             a->dir = ARROW_NONE;
             add_score(g, SCORE_HARDEN);
+            sound_play_sfx(&g->sound, SFX_HIT);
             continue;
         }
         if (boss_hit_by_arrow(&g->boss, a->x, a->y))
@@ -252,6 +275,7 @@ void game_update(Game *g, uint8_t buttons)
         {
             item_spawn(&g->items, i, g->enemies.e[i].x);
             add_score(g, SCORE_DESTROY);
+            sound_play_sfx(&g->sound, SFX_DEFEAT);
         }
     }
 
@@ -260,6 +284,7 @@ void game_update(Game *g, uint8_t buttons)
     if (got != ITEM_NONE)
     {
         add_score(g, SCORE_ITEM);
+        sound_play_sfx(&g->sound, SFX_COIN);
         if (got == ITEM_STAR)
         {
             g->star_timer = 255;
@@ -302,6 +327,7 @@ void game_update(Game *g, uint8_t buttons)
 
     if (!g->player.alive)
     {
+        sound_play_sfx(&g->sound, SFX_DEATH);
         g->state = GS_DYING;
         g->state_timer = STATE_TIME_DEAD;
         // やられるとパワー矢と無敵を失う。
