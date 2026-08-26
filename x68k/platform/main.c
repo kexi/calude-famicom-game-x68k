@@ -10,7 +10,9 @@
 
 #include <stdint.h>
 
+#include "../core/arrow.h"
 #include "../core/camera.h"
+#include "../core/enemy.h"
 #include "../core/level.h"
 #include "../core/player.h"
 #include "../core/rules.h"
@@ -26,14 +28,31 @@ int _dos_super(int stack);
 // Why not V-DISP 割り込み (IOCS _VDISPST) を使わないか: ポーリングは
 // 可動部が少なく決定的で、割り込みベクタの設定や復帰の面倒が無い。
 // エミュレータ上では busy-wait の代償も問題にならない。
+// GPIP4 は垂直帰線中に L になる (アクティブ L)。
+//
+// ここを取り違えると、待ち方が裏返って「いつまでも来ない帰線」を
+// 待ち続ける。実際それで固まった。値が 0 のときが帰線中。
+static int in_vblank(void) { return (peek8(MFP_GPIP) & MFP_GPIP_VDISP) == 0; }
+
 static void wait_vsync(void)
 {
-    // まず「帰線でない」状態まで進める。すでに帰線中に呼ばれたとき、
-    // その帰線を次のフレームと数えてしまうのを避けるため。
-    while (peek8(MFP_GPIP) & MFP_GPIP_VDISP)
+    // 上限を付ける。
+    //
+    // Why: 1 フレームぶんの仕事が重くなると、呼んだ時点で既に帰線を
+    // 通り過ぎていることがある。上限が無いと次の帰線まで丸ごと待つか、
+    // 条件次第で永久に抜けられない。落ちるより 1 フレーム飛ばす方がよい。
+    //
+    // 1 フレームは約 18 万サイクル。ループ 1 周が数十サイクルなので、
+    // 2 万回も回れば必ず 1 フレームぶんを超える。
+    const long kGuard = 20000;
+
+    // まず帰線が明けるのを待つ。すでに帰線中に呼ばれたとき、その帰線を
+    // 次のフレームと数えてしまうのを避けるため。
+    for (long i = 0; i < kGuard && in_vblank(); ++i)
     {
     }
-    while (!(peek8(MFP_GPIP) & MFP_GPIP_VDISP))
+    // 次の帰線の入りを待つ。
+    for (long i = 0; i < kGuard && !in_vblank(); ++i)
     {
     }
 }
@@ -75,6 +94,9 @@ static void put_num(char *buf, int value, int digits)
     }
 }
 
+// 状態の出力を続けるか。埋まったら止める。
+static int g_report_enabled = 1;
+
 static void report_state(const Player *p, uint32_t frame)
 {
     // "X=0123 Y=0168 G=1 A=1 F=0042\r\n" の固定長。
@@ -103,6 +125,21 @@ static void report_state(const Player *p, uint32_t frame)
     _dos_print(line);
 }
 
+// 硬化した敵を、プレイヤーの当たり判定へ差し込む。
+//
+// player.c は敵を知らない。知っていると、物理のテストに敵の一式が
+// 要ることになる。呼ぶ側 (ここ) が繋ぐ。
+static int hook_solid(const Player *p, int32_t edge_x, void *user)
+{
+    (void)edge_x;
+    return enemy_probe_solid((const EnemyWorld *)user, p);
+}
+
+static uint8_t hook_platform(const Player *p, void *user)
+{
+    return enemy_probe_platform((const EnemyWorld *)user, p);
+}
+
 int main(void)
 {
     // ハードウェアを直に叩くのでスーパーバイザへ移る。
@@ -117,15 +154,56 @@ int main(void)
     Player player;
     player_init(&player);
 
+    EnemyWorld enemies;
+    enemy_init(&enemies, 0);
+
+    ArrowWorld arrows;
+    arrow_init(&arrows);
+
+    PlayerHooks hooks;
+    hooks.solid_at = hook_solid;
+    hooks.platform_under = hook_platform;
+    hooks.user = &enemies;
+
     uint8_t prev = 0;
     uint32_t frame = 0;
     int report_tick = 0;
+    int report_count = 0;
 
     for (;;)
     {
         const uint8_t buttons = input_read();
 
-        player_update(&player, buttons, prev);
+        // hitstop 中は世界が止まる。撃破の手応えを出すための演出で、
+        // この間はプレイヤーも敵も動かない。
+        if (enemies.hitstop > 0)
+        {
+            --enemies.hitstop;
+        }
+        else
+        {
+            player_update(&player, buttons, prev, &hooks);
+            arrow_fire(&arrows, &player, buttons, prev);
+
+            const int32_t scroll_now = camera_scroll_for(player.world_x);
+            arrow_update(&arrows, scroll_now);
+
+            // 矢が敵に当たったかを見る。当たった矢は消える。
+            for (int i = 0; i < ARROW_SLOTS; ++i)
+            {
+                if (arrows.a[i].dir == ARROW_NONE)
+                {
+                    continue;
+                }
+                if (enemy_hit_by_arrow(&enemies, arrows.a[i].x, arrows.a[i].y))
+                {
+                    arrows.a[i].dir = ARROW_NONE;
+                }
+            }
+
+            enemy_update(&enemies, &player);
+            enemy_touch_player(&enemies, &player, buttons);
+        }
         prev = buttons;
 
         const int32_t scroll = camera_scroll_for(player.world_x);
@@ -136,15 +214,55 @@ int main(void)
         video_set_scroll(scroll);
         video_put_player(screen_x, player_y(&player), player.facing);
 
+        // 敵。画面の外にいるものは出さない。
+        for (int i = 0; i < ENEMY_COUNT; ++i)
+        {
+            const Enemy *e = &enemies.e[i];
+            const int visible = e->flag == ENEMY_ALIVE || e->flag == ENEMY_HARDENED;
+            if (!visible)
+            {
+                video_put_enemy(i, -32, -32, e->type, 0);
+                continue;
+            }
+            video_put_enemy(i, (int)(e->x - scroll), e->y, e->type, e->flag == ENEMY_HARDENED);
+        }
+
+        // 矢。
+        for (int i = 0; i < ARROW_SLOTS; ++i)
+        {
+            const Arrow *a = &arrows.a[i];
+            if (a->dir == ARROW_NONE)
+            {
+                video_put_arrow(i, -32, -32, ARROW_RIGHT);
+                continue;
+            }
+            video_put_arrow(i, (int)(a->x - scroll), a->y, a->dir);
+        }
+
+        video_hide_from(7);
+
         ++frame;
 
-        // 30 フレーム (約 0.5 秒) ごとに状態を出す。毎フレーム出すと
-        // 出力が多すぎて、期待値と突き合わせるときに探せなくなる。
-        // 30 フレームごとに 1 回。剰余は除算を呼ぶのでカウンタで数える。
-        if (++report_tick >= 30)
+        // 30 フレームごとに 1 回、状態を出す。
+        //
+        // ずっと出し続けるとテキスト画面が埋まり、ゲームの絵の上に
+        // 文字が重なって見えなくなる (テキストはスプライトより手前)。
+        // 自動検証に要るのは最初の数十秒ぶんなので、そこで止める。
+        if (g_report_enabled && ++report_tick >= 30)
         {
             report_tick = 0;
             report_state(&player, frame);
+            if (++report_count >= 40)
+            {
+                // 出すのは止めるが、画面は消さない。
+                //
+                // Why not 消してゲームだけにしないか: --dump-text は
+                // テキスト画面を読み戻して自動検証に使う。消すと
+                // 何も読めなくなり、動いていることを機械で確かめられない。
+                // 文字がゲームの絵に重なるのは承知の上で、検証を採る。
+                // 人が遊ぶときは x68k-play で窓に出せばよい。
+                g_report_enabled = 0;
+            }
         }
 
         // 死んだら少し待って初期位置へ戻す。Phase 3 の範囲では
@@ -152,6 +270,8 @@ int main(void)
         if (!player.alive)
         {
             player_init(&player);
+            enemy_init(&enemies, 0);
+            arrow_init(&arrows);
         }
     }
 }

@@ -26,4 +26,13 @@ void video_set_scroll(int32_t scroll_x);
 // プレイヤーのスプライトを置く。x/y は画面座標。
 void video_put_player(int x, int y, int facing);
 
+// 敵を置く。hardened なら灰色のパレットで描く。
+void video_put_enemy(int slot, int x, int y, int type, int hardened);
+
+// 矢を置く。
+void video_put_arrow(int slot, int x, int y, int dir);
+
+// 使わなかったスプライトを消す。毎フレーム最後に呼ぶ。
+void video_hide_from(int first_index);
+
 #endif  // CALUDE_PLATFORM_VIDEO_H

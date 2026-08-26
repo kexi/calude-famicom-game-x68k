@@ -57,7 +57,7 @@ build-hello:
 #
 # core/ はプラットフォーム非依存、platform/ が X68000 のハードを叩く。
 # アセットは tools/ が生成した .inc.c を混ぜる。
-game_srcs := "x68k/platform/crt0.S x68k/platform/main.c x68k/platform/video.c x68k/platform/input.c x68k/core/level.c x68k/core/player.c x68k/assets/levels.inc.c"
+game_srcs := "x68k/platform/crt0.S x68k/platform/main.c x68k/platform/video.c x68k/platform/input.c x68k/core/level.c x68k/core/player.c x68k/core/enemy.c x68k/core/arrow.c x68k/assets/levels.inc.c"
 
 [doc('アセット (レベル・フォント) を生成する')]
 assets:
@@ -113,7 +113,8 @@ test:
     mkdir -p {{build}}
     clang -std=c17 -O1 -g -Wall -Wextra -Werror \
       -o {{build}}/test x68k/test/test_main.c x68k/core/level.c \
-      x68k/core/player.c x68k/assets/levels.inc.c
+      x68k/core/player.c x68k/core/enemy.c x68k/core/arrow.c \
+      x68k/assets/levels.inc.c
     ./{{build}}/test
 
 [doc('エミュレータ上で実際に動かして状態を検査する')]

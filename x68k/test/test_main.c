@@ -14,7 +14,9 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "../core/arrow.h"
 #include "../core/camera.h"
+#include "../core/enemy.h"
 #include "../core/level.h"
 #include "../core/player.h"
 
@@ -107,15 +109,15 @@ static void test_jump_trajectory_held(void)
     CHECK_EQ(p.on_ground, 1);
 
     // 立ち上がりでジャンプ開始。prev に A が無い状態で A を押す。
-    player_update(&p, BTN_A, 0);
+    player_update(&p, BTN_A, 0, NULL);
     CHECK_EQ(p.on_ground, 0);
     CHECK_EQ(p.vel_y, -1024 + GRAV_HOLD);
     CHECK_EQ(player_y(&p), 164);
 
-    player_update(&p, BTN_A, BTN_A);
+    player_update(&p, BTN_A, BTN_A, NULL);
     CHECK_EQ(player_y(&p), 160);
 
-    player_update(&p, BTN_A, BTN_A);
+    player_update(&p, BTN_A, BTN_A, NULL);
     CHECK_EQ(player_y(&p), 156);
 }
 
@@ -127,19 +129,19 @@ static void test_no_autojump(void)
 
     Player p;
     player_init(&p);
-    player_update(&p, BTN_A, 0);  // ジャンプ開始
+    player_update(&p, BTN_A, 0, NULL);  // ジャンプ開始
     const int32_t v_after_jump = p.vel_y;
 
     // 着地するまで押し続ける。
     for (int i = 0; i < 200 && !p.on_ground; ++i)
     {
-        player_update(&p, BTN_A, BTN_A);
+        player_update(&p, BTN_A, BTN_A, NULL);
     }
     CHECK_EQ(p.on_ground, 1);
     CHECK_EQ(player_y(&p), PLAYER_GROUND_Y);
 
     // 接地したまま押し続けても跳ばない。
-    player_update(&p, BTN_A, BTN_A);
+    player_update(&p, BTN_A, BTN_A, NULL);
     CHECK_EQ(p.on_ground, 1);
     CHECK(v_after_jump < 0);
 }
@@ -162,10 +164,10 @@ static void test_variable_jump_height(void)
         Player p;
         player_init(&p);
         p.world_x = open_sky_x;
-        player_update(&p, BTN_A, 0);
+        player_update(&p, BTN_A, 0, NULL);
         for (int i = 0; i < 200 && !p.on_ground; ++i)
         {
-            player_update(&p, BTN_A, BTN_A);
+            player_update(&p, BTN_A, BTN_A, NULL);
             if (player_y(&p) < peak_held)
             {
                 peak_held = player_y(&p);
@@ -178,10 +180,10 @@ static void test_variable_jump_height(void)
         Player p;
         player_init(&p);
         p.world_x = open_sky_x;
-        player_update(&p, BTN_A, 0);
+        player_update(&p, BTN_A, 0, NULL);
         for (int i = 0; i < 200 && !p.on_ground; ++i)
         {
-            player_update(&p, 0, BTN_A);  // すぐ離す
+            player_update(&p, 0, BTN_A, NULL);  // すぐ離す
             if (player_y(&p) < peak_tapped)
             {
                 peak_tapped = player_y(&p);
@@ -213,13 +215,13 @@ static void test_diff_to_halt_jump(void)
     // ジャンプ開始のフレーム。この時点ではまだ 1px も上がっていないので、
     // A を離していても弱い重力が使われる。
     const int32_t before = JUMP_VEL;
-    player_update(&p, BTN_A, 0);
+    player_update(&p, BTN_A, 0, NULL);
     CHECK_EQ(p.vel_y - before, GRAV_HOLD);
 
     // ここで既に 4px 上がっている (168 -> 164) ので、離すと強い重力へ移る。
     CHECK_EQ(p.jump_origin_y - player_y(&p), 4);
     const int32_t v1 = p.vel_y;
-    player_update(&p, 0, BTN_A);
+    player_update(&p, 0, BTN_A, NULL);
     CHECK_EQ(p.vel_y - v1, GRAV_FALL);
 }
 
@@ -236,7 +238,7 @@ static void test_fall_into_pit(void)
     // 接地判定を解かせる (足場が無いので落ち始める)。
     for (int i = 0; i < 400 && p.alive; ++i)
     {
-        player_update(&p, 0, 0);
+        player_update(&p, 0, 0, NULL);
     }
     CHECK_EQ(p.alive, 0);
     CHECK(player_y(&p) >= PLAYER_DEATH_Y);
@@ -257,7 +259,7 @@ static void test_walk_off_ledge(void)
     int frames = 0;
     while (p.on_ground && p.world_x < 100 && frames < 200)
     {
-        player_update(&p, BTN_RIGHT, BTN_RIGHT);
+        player_update(&p, BTN_RIGHT, BTN_RIGHT, NULL);
         ++frames;
     }
     // 穴の上に来たら接地が外れる。
@@ -272,10 +274,10 @@ static void test_landing_snaps_to_surface(void)
 
     Player p;
     player_init(&p);
-    player_update(&p, BTN_A, 0);
+    player_update(&p, BTN_A, 0, NULL);
     for (int i = 0; i < 200 && !p.on_ground; ++i)
     {
-        player_update(&p, 0, BTN_A);
+        player_update(&p, 0, BTN_A, NULL);
     }
 
     // 地面 (上端 200) に立つと y = 200 - 32 = 168。
@@ -300,7 +302,7 @@ static void test_horizontal_clamp(void)
 
     for (int i = 0; i < 100; ++i)
     {
-        player_update(&p, BTN_LEFT, BTN_LEFT);
+        player_update(&p, BTN_LEFT, BTN_LEFT, NULL);
     }
     CHECK_EQ(p.world_x, 0);
     CHECK_EQ(p.facing, 1);
@@ -320,7 +322,7 @@ static void test_walk_into_pit_dies(void)
 
     for (int i = 0; i < 300 && p.alive; ++i)
     {
-        player_update(&p, BTN_LEFT, BTN_LEFT);
+        player_update(&p, BTN_LEFT, BTN_LEFT, NULL);
     }
     CHECK_EQ(p.alive, 0);
     CHECK(p.world_x < 96);  // 穴の右端より左で落ちている
@@ -339,6 +341,414 @@ static void test_camera(void)
     CHECK_EQ(camera_scroll_for(WORLD_X_MAX), MAX_SCROLL);
 }
 
+// --- 敵と硬化 --------------------------------------------------------------
+//
+// 硬化はこのゲームの核心。矢では倒れず、硬化して足場かつ壁になる。
+// 1-2 と 1-3 の広い穴はパタパタを硬化させて渡るのが解法なので、
+// ここが壊れるとステージが詰む。
+
+// テストから硬化した敵の判定を player へ渡すためのフック。
+static int hook_solid(const Player *p, int32_t edge_x, void *user)
+{
+    (void)edge_x;
+    return enemy_probe_solid((const EnemyWorld *)user, p);
+}
+
+static uint8_t hook_platform(const Player *p, void *user)
+{
+    return enemy_probe_platform((const EnemyWorld *)user, p);
+}
+
+static void test_arrow_hardens_enemy(void)
+{
+    printf("敵: 矢が当たると倒れずに硬化する\n");
+    level_set_stage(0);
+
+    EnemyWorld w;
+    enemy_init(&w, 0);
+    w.e[0].flag = ENEMY_ALIVE;
+    w.e[0].x = 300;
+    w.e[0].y = ENEMY_GROUND;
+
+    // 敵の高さ帯へ矢を通す。
+    const int hit = enemy_hit_by_arrow(&w, 300, ENEMY_GROUND - 8);
+    CHECK_EQ(hit, 1);
+    // 倒れずに硬化している。
+    CHECK_EQ(w.e[0].flag, ENEMY_HARDENED);
+    // 硬化時間は 1 段階目の 45 tick。
+    CHECK_EQ(w.e[0].timer, 45);
+    // 世界が一瞬止まる。
+    CHECK_EQ(w.hitstop, 2);
+}
+
+static void test_harden_ticks_every_other_frame(void)
+{
+    printf("敵: 硬化は 2 フレームに 1 減る\n");
+    level_set_stage(0);
+
+    EnemyWorld w;
+    enemy_init(&w, 0);
+    w.e[0].x = 300;
+    w.e[0].y = ENEMY_GROUND;
+    enemy_hit_by_arrow(&w, 300, ENEMY_GROUND - 8);
+    const int start = w.e[0].timer;
+
+    Player p;
+    player_init(&p);
+
+    // 20 フレーム進めると、減るのは約半分。
+    for (int i = 0; i < 20; ++i)
+    {
+        enemy_update(&w, &p);
+    }
+    const int elapsed = start - w.e[0].timer;
+    CHECK(elapsed >= 9 && elapsed <= 11);
+    CHECK_EQ(w.e[0].flag, ENEMY_HARDENED);
+}
+
+static void test_fifth_hit_destroys(void)
+{
+    printf("敵: 追い撃ち 5 発目で壊れる\n");
+    level_set_stage(0);
+
+    EnemyWorld w;
+    enemy_init(&w, 0);
+    w.e[0].x = 300;
+    w.e[0].y = ENEMY_GROUND;
+
+    // 1 発目で硬化。
+    enemy_hit_by_arrow(&w, 300, ENEMY_GROUND - 8);
+    CHECK_EQ(w.e[0].flag, ENEMY_HARDENED);
+
+    // 2-4 発目は硬化時間が伸びるだけ。
+    for (int i = 1; i <= 3; ++i)
+    {
+        enemy_hit_by_arrow(&w, 300, ENEMY_GROUND - 8);
+        CHECK_EQ(w.e[0].flag, ENEMY_HARDENED);
+    }
+
+    // 5 発目で壊れる。
+    enemy_hit_by_arrow(&w, 300, ENEMY_GROUND - 8);
+    CHECK_EQ(w.e[0].flag, ENEMY_DYING);
+}
+
+static void test_hardened_enemy_is_platform(void)
+{
+    printf("敵: 硬化した敵の上に立てる\n");
+    level_set_stage(0);
+
+    EnemyWorld w;
+    enemy_init(&w, 0);
+    for (int i = 1; i < ENEMY_COUNT; ++i)
+    {
+        w.e[i].flag = ENEMY_GONE;
+    }
+    w.e[0].flag = ENEMY_HARDENED;
+    w.e[0].x = 300;
+    w.e[0].y = 150;
+
+    Player p;
+    player_init(&p);
+    // 敵の真上へ置く。足元 (y+32) が敵の上端 150 に来る位置。
+    p.world_x = 300;
+    p.y_fixed = (int32_t)(150 - 32) << 8;
+
+    CHECK(enemy_probe_platform(&w, &p) == 150);
+
+    // 硬化が解けたら足場でなくなる。
+    w.e[0].flag = ENEMY_ALIVE;
+    CHECK(enemy_probe_platform(&w, &p) == PROBE_NONE);
+}
+
+static void test_hardened_enemy_blocks_movement(void)
+{
+    printf("敵: 硬化した敵は横移動を塞ぐ\n");
+    level_set_stage(0);
+
+    EnemyWorld w;
+    enemy_init(&w, 0);
+    for (int i = 1; i < ENEMY_COUNT; ++i)
+    {
+        w.e[i].flag = ENEMY_GONE;
+    }
+    w.e[0].flag = ENEMY_HARDENED;
+    w.e[0].x = 300;
+    w.e[0].y = ENEMY_GROUND;
+
+    Player p;
+    player_init(&p);
+    p.world_x = 290;
+    p.y_fixed = (int32_t)PLAYER_GROUND_Y << 8;
+
+    // 横に重なり、上にも下にも外れていない位置なら塞ぐ。
+    CHECK_EQ(enemy_probe_solid(&w, &p), 1);
+
+    // 十分に上にいれば塞がない (乗っている扱い)。
+    p.y_fixed = (int32_t)(ENEMY_GROUND - 32) << 8;
+    CHECK_EQ(enemy_probe_solid(&w, &p), 0);
+}
+
+// 硬化した敵を足場にして穴を渡れること。
+// 1-2 と 1-3 の設計そのものなので、通らないとゲームが成立しない。
+static void test_cross_pit_on_hardened_enemy(void)
+{
+    printf("敵: 硬化した敵を足場に穴の上へ立てる\n");
+    level_set_stage(0);
+
+    EnemyWorld w;
+    enemy_init(&w, 0);
+    for (int i = 1; i < ENEMY_COUNT; ++i)
+    {
+        w.e[i].flag = ENEMY_GONE;
+    }
+    // 1-1 のメタ列 4-5 は穴 (world 64-95)。その上へ硬化した敵を置く。
+    w.e[0].flag = ENEMY_HARDENED;
+    w.e[0].x = 72;
+    w.e[0].y = 170;
+
+    Player p;
+    player_init(&p);
+    p.world_x = 72;
+    p.y_fixed = (int32_t)(170 - 32) << 8;
+    p.on_ground = 1;
+
+    PlayerHooks hooks = {hook_solid, hook_platform, &w};
+
+    // 穴の上でも、硬化した敵がいる限り落ちない。
+    for (int i = 0; i < 30; ++i)
+    {
+        player_update(&p, 0, 0, &hooks);
+    }
+    CHECK_EQ(p.alive, 1);
+    CHECK_EQ(p.on_ground, 1);
+    CHECK_EQ(player_y(&p), 170 - 32);
+
+    // 硬化が解けたら落ちる。
+    w.e[0].flag = ENEMY_ALIVE;
+    for (int i = 0; i < 300 && p.alive; ++i)
+    {
+        player_update(&p, 0, 0, &hooks);
+    }
+    CHECK_EQ(p.alive, 0);
+}
+
+static void test_stomp_bounces(void)
+{
+    printf("敵: 踏むとバウンドするが倒せない\n");
+    level_set_stage(0);
+
+    EnemyWorld w;
+    enemy_init(&w, 0);
+    for (int i = 1; i < ENEMY_COUNT; ++i)
+    {
+        w.e[i].flag = ENEMY_GONE;
+    }
+    w.e[0].flag = ENEMY_ALIVE;
+    w.e[0].x = 300;
+    w.e[0].y = ENEMY_GROUND;
+
+    Player p;
+    player_init(&p);
+    p.world_x = 300;
+    // 空中で下降中、浅く当たる位置。
+    p.y_fixed = (int32_t)(ENEMY_GROUND - 32 + 5) << 8;
+    p.on_ground = 0;
+    p.vel_y = 256;
+
+    const int r = enemy_touch_player(&w, &p, 0);
+    CHECK_EQ(r, 1);
+    // 踏んでも敵は生きている。
+    CHECK_EQ(w.e[0].flag, ENEMY_ALIVE);
+    // 上向きに跳ね返る。
+    CHECK_EQ(p.vel_y, -3 * 256);
+    CHECK_EQ(p.alive, 1);
+}
+
+static void test_stomp_with_a_jumps_higher(void)
+{
+    printf("敵: A を押しながら踏むと高く跳ねる\n");
+    level_set_stage(0);
+
+    EnemyWorld w;
+    enemy_init(&w, 0);
+    for (int i = 1; i < ENEMY_COUNT; ++i)
+    {
+        w.e[i].flag = ENEMY_GONE;
+    }
+    w.e[0].flag = ENEMY_ALIVE;
+    w.e[0].x = 300;
+    w.e[0].y = ENEMY_GROUND;
+
+    Player p;
+    player_init(&p);
+    p.world_x = 300;
+    p.y_fixed = (int32_t)(ENEMY_GROUND - 32 + 5) << 8;
+    p.on_ground = 0;
+    p.vel_y = 256;
+
+    enemy_touch_player(&w, &p, BTN_A);
+    // 通常の -3.0 より大きい (= より上向き)。
+    CHECK(p.vel_y < -3 * 256);
+}
+
+static void test_deep_contact_kills(void)
+{
+    printf("敵: 深く当たるとやられる\n");
+    level_set_stage(0);
+
+    EnemyWorld w;
+    enemy_init(&w, 0);
+    for (int i = 1; i < ENEMY_COUNT; ++i)
+    {
+        w.e[i].flag = ENEMY_GONE;
+    }
+    w.e[0].flag = ENEMY_ALIVE;
+    w.e[0].x = 300;
+    w.e[0].y = ENEMY_GROUND;
+
+    Player p;
+    player_init(&p);
+    p.world_x = 300;
+    // 地上で正面から当たる。
+    p.y_fixed = (int32_t)(ENEMY_GROUND - 10) << 8;
+    p.on_ground = 1;
+
+    const int r = enemy_touch_player(&w, &p, 0);
+    CHECK_EQ(r, -1);
+    CHECK_EQ(p.alive, 0);
+}
+
+static void test_walker_turns_at_pit(void)
+{
+    printf("敵: 歩く敵は穴で折り返す\n");
+    level_set_stage(0);
+
+    EnemyWorld w;
+    enemy_init(&w, 0);
+    for (int i = 1; i < ENEMY_COUNT; ++i)
+    {
+        w.e[i].flag = ENEMY_GONE;
+    }
+    w.e[0].type = ENEMY_WALKER;
+    w.e[0].flag = ENEMY_ALIVE;
+    // 1-1 のメタ列 4-5 が穴 (world 64-95)。その右隣から左へ歩かせる。
+    w.e[0].x = 100;
+    w.e[0].dir = 1;
+    w.e[0].y = ENEMY_GROUND;
+
+    Player p;
+    player_init(&p);
+
+    for (int i = 0; i < 200; ++i)
+    {
+        enemy_update(&w, &p);
+    }
+
+    // 穴には落ちず、右向きへ折り返している。
+    CHECK(w.e[0].x >= 90);
+    CHECK_EQ(w.e[0].dir, 0);
+}
+
+// --- 矢 ---------------------------------------------------------------------
+
+static void test_arrow_fires_in_facing_direction(void)
+{
+    printf("矢: 向いている方向へ飛ぶ\n");
+    level_set_stage(0);
+
+    ArrowWorld w;
+    arrow_init(&w);
+
+    Player p;
+    player_init(&p);
+    p.world_x = 200;
+    p.facing = 0;
+
+    CHECK_EQ(arrow_fire(&w, &p, BTN_B, 0), 1);
+    CHECK_EQ(w.a[0].dir, ARROW_RIGHT);
+
+    // 押しっぱなしでは連射しない。
+    CHECK_EQ(arrow_fire(&w, &p, BTN_B, BTN_B), 0);
+}
+
+static void test_arrow_limit_by_weapon(void)
+{
+    printf("矢: 通常装備は 1 本まで\n");
+    level_set_stage(0);
+
+    ArrowWorld w;
+    arrow_init(&w);
+
+    Player p;
+    player_init(&p);
+    p.world_x = 200;
+
+    CHECK_EQ(arrow_fire(&w, &p, BTN_B, 0), 1);
+    // 1 本出ている間は撃てない。
+    CHECK_EQ(arrow_fire(&w, &p, BTN_B, 0), 0);
+
+    // パワー矢なら 2 本目が出る。
+    w.weapon_level = 1;
+    CHECK_EQ(arrow_fire(&w, &p, BTN_B, 0), 1);
+}
+
+static void test_arrow_up_needs_up(void)
+{
+    printf("矢: 上入力で真上へ、下は空中限定\n");
+    level_set_stage(0);
+
+    Player p;
+    player_init(&p);
+    p.world_x = 200;
+
+    {
+        ArrowWorld w;
+        arrow_init(&w);
+        CHECK_EQ(arrow_fire(&w, &p, (uint8_t)(BTN_B | BTN_UP), 0), 1);
+        CHECK_EQ(w.a[0].dir, ARROW_UP);
+    }
+    {
+        // 地上で下を押しても横撃ちになる。
+        ArrowWorld w;
+        arrow_init(&w);
+        p.on_ground = 1;
+        CHECK_EQ(arrow_fire(&w, &p, (uint8_t)(BTN_B | BTN_DOWN), 0), 1);
+        CHECK(w.a[0].dir != ARROW_DOWN);
+    }
+    {
+        // 空中なら下へ撃てる。
+        ArrowWorld w;
+        arrow_init(&w);
+        p.on_ground = 0;
+        CHECK_EQ(arrow_fire(&w, &p, (uint8_t)(BTN_B | BTN_DOWN), 0), 1);
+        CHECK_EQ(w.a[0].dir, ARROW_DOWN);
+    }
+}
+
+static void test_arrow_disappears_offscreen(void)
+{
+    printf("矢: 画面外へ出ると消える\n");
+    level_set_stage(0);
+
+    ArrowWorld w;
+    arrow_init(&w);
+
+    Player p;
+    player_init(&p);
+    // 平地の上で撃つ (メタ列 0-3)。
+    p.world_x = 16;
+    p.facing = 0;
+    p.y_fixed = (int32_t)100 << 8;  // 空中の高さ。地形に当たらない
+
+    CHECK_EQ(arrow_fire(&w, &p, BTN_B, 0), 1);
+
+    for (int i = 0; i < 200 && w.a[0].dir != ARROW_NONE; ++i)
+    {
+        arrow_update(&w, 0);
+    }
+    CHECK_EQ(w.a[0].dir, ARROW_NONE);
+}
+
 int main(void)
 {
     test_level_features();
@@ -353,6 +763,22 @@ int main(void)
     test_horizontal_clamp();
     test_walk_into_pit_dies();
     test_camera();
+
+    test_arrow_hardens_enemy();
+    test_harden_ticks_every_other_frame();
+    test_fifth_hit_destroys();
+    test_hardened_enemy_is_platform();
+    test_hardened_enemy_blocks_movement();
+    test_cross_pit_on_hardened_enemy();
+    test_stomp_bounces();
+    test_stomp_with_a_jumps_higher();
+    test_deep_contact_kills();
+    test_walker_turns_at_pit();
+
+    test_arrow_fires_in_facing_direction();
+    test_arrow_limit_by_weapon();
+    test_arrow_up_needs_up();
+    test_arrow_disappears_offscreen();
 
     printf("\n%d 件中 %d 件成功\n", g_checks, g_checks - g_failures);
     if (g_failures)

@@ -2,6 +2,8 @@
 
 #include "player.h"
 
+#include <stddef.h>
+
 #include "level.h"
 
 void player_init(Player *p)
@@ -55,7 +57,7 @@ uint8_t player_probe_head(const Player *p) { return probe_two(p, 8); }
 // 原作は移動してから前縁を判定し、当たっていたら座標を戻す
 // (src/player.s:40-113)。同じ順序にしないと、壁際で 1px 分の
 // 食い込みが出たり出なかったりする。
-static void try_move(Player *p, int delta, int32_t edge_offset)
+static void try_move(Player *p, int delta, int32_t edge_offset, const PlayerHooks *hooks)
 {
     const int32_t saved = p->world_x;
 
@@ -69,13 +71,35 @@ static void try_move(Player *p, int delta, int32_t edge_offset)
         p->world_x = WORLD_X_MAX;
     }
 
-    if (player_probe_side(p, p->world_x + edge_offset))
+    const int32_t edge = p->world_x + edge_offset;
+    int blocked = player_probe_side(p, edge);
+    if (!blocked && hooks != NULL && hooks->solid_at != NULL)
+    {
+        blocked = hooks->solid_at(p, edge, hooks->user);
+    }
+
+    if (blocked)
     {
         p->world_x = saved;
     }
 }
 
-void player_update(Player *p, uint8_t buttons, uint8_t prev)
+// 足元の面。地形に無ければフックにも訊く (硬化した敵が足場になる)。
+static uint8_t floor_under(const Player *p, const PlayerHooks *hooks)
+{
+    const uint8_t ground = player_probe_feet(p);
+    if (ground != PROBE_NONE)
+    {
+        return ground;
+    }
+    if (hooks != NULL && hooks->platform_under != NULL)
+    {
+        return hooks->platform_under(p, hooks->user);
+    }
+    return PROBE_NONE;
+}
+
+void player_update(Player *p, uint8_t buttons, uint8_t prev, const PlayerHooks *hooks)
 {
     if (!p->alive)
     {
@@ -89,18 +113,18 @@ void player_update(Player *p, uint8_t buttons, uint8_t prev)
     if (buttons & BTN_LEFT)
     {
         p->facing = 1;
-        try_move(p, -PLAYER_SPEED, 0);
+        try_move(p, -PLAYER_SPEED, 0, hooks);
     }
     if (buttons & BTN_RIGHT)
     {
         p->facing = 0;
-        try_move(p, PLAYER_SPEED, 15);
+        try_move(p, PLAYER_SPEED, 15, hooks);
     }
 
     // --- 接地中: 足場の確認とジャンプ開始 ---
     if (p->on_ground)
     {
-        const int has_ground = player_probe_feet(p) != PROBE_NONE;
+        const int has_ground = floor_under(p, hooks) != PROBE_NONE;
         if (!has_ground)
         {
             // 足場から歩いて落ちた。
@@ -164,7 +188,7 @@ void player_update(Player *p, uint8_t buttons, uint8_t prev)
     }
     else
     {
-        const uint8_t floor = player_probe_feet(p);
+        const uint8_t floor = floor_under(p, hooks);
         if (floor != PROBE_NONE)
         {
             // 足 (y+32) が面の上端に乗る。

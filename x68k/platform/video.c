@@ -15,6 +15,12 @@
 #define PAT_BLOCK 2   // ブロック
 #define PAT_PLAYER_TOP 3
 #define PAT_PLAYER_BOTTOM 4
+#define PAT_ENEMY 5
+#define PAT_BAT 6
+#define PAT_ARROW_H 7
+#define PAT_ARROW_V 8
+#define PAT_ENEMY_STONE 9
+#define PAT_BAT_STONE 10
 
 // パレットブロック 0 の色番号。
 #define COL_TRANSPARENT 0
@@ -24,6 +30,9 @@
 #define COL_BLOCK 4
 #define COL_SKIN 5
 #define COL_CLOTH 6
+#define COL_ENEMY 7
+#define COL_STONE 8
+#define COL_ARROW 9
 
 // X68000 のパレットは GRB555 + 下位 1bit が輝度。
 // 上位から G(5) R(5) B(5) I(1) の順に詰める。
@@ -42,6 +51,9 @@ static void set_palette(void)
     poke16(VC_TEXT_PALETTE + COL_BLOCK * 2, grb(24, 18, 8));
     poke16(VC_TEXT_PALETTE + COL_SKIN * 2, grb(31, 22, 16));
     poke16(VC_TEXT_PALETTE + COL_CLOTH * 2, grb(28, 8, 8));
+    poke16(VC_TEXT_PALETTE + COL_ENEMY * 2, grb(26, 6, 20));
+    poke16(VC_TEXT_PALETTE + COL_STONE * 2, grb(16, 16, 16));
+    poke16(VC_TEXT_PALETTE + COL_ARROW * 2, grb(30, 28, 20));
 }
 
 // 16x16 パターンを 1 色で塗る。
@@ -135,6 +147,96 @@ static void build_patterns(void)
     }
 }
 
+// 敵と矢のパターンを作る。
+static void build_actor_patterns(void)
+{
+    // 決意マン: 四角い体に目。
+    fill_pattern(PAT_ENEMY, COL_TRANSPARENT);
+    for (int y = 2; y < 16; ++y)
+    {
+        for (int x = 1; x < 15; ++x)
+        {
+            set_pattern_pixel(PAT_ENEMY, x, y, COL_ENEMY);
+        }
+    }
+    set_pattern_pixel(PAT_ENEMY, 5, 6, COL_TRANSPARENT);
+    set_pattern_pixel(PAT_ENEMY, 10, 6, COL_TRANSPARENT);
+
+    // コウモリ: 横に広い羽。
+    fill_pattern(PAT_BAT, COL_TRANSPARENT);
+    for (int x = 0; x < 16; ++x)
+    {
+        for (int y = 6; y < 10; ++y)
+        {
+            set_pattern_pixel(PAT_BAT, x, y, COL_ENEMY);
+        }
+    }
+    for (int y = 4; y < 12; ++y)
+    {
+        for (int x = 6; x < 10; ++x)
+        {
+            set_pattern_pixel(PAT_BAT, x, y, COL_ENEMY);
+        }
+    }
+
+    // 硬化した敵は石の色で別のパターンを持つ。
+    //
+    // Why not パレットブロックを変えて同じ絵を使い回さないか:
+    // このエミュレータのテキスト/スプライトパレットは 16 色しかなく
+    // (実機は 16 色 x 16 ブロック)、ブロック 1 の位置へ書くと折り返して
+    // ブロック 0 を壊す。実際それで画面全体が灰色になった。
+    // PCG の枠は 256 個あって余っているので、パターンを分ける方が安全。
+    fill_pattern(PAT_ENEMY_STONE, COL_TRANSPARENT);
+    for (int y = 2; y < 16; ++y)
+    {
+        for (int x = 1; x < 15; ++x)
+        {
+            set_pattern_pixel(PAT_ENEMY_STONE, x, y, COL_STONE);
+        }
+    }
+
+    fill_pattern(PAT_BAT_STONE, COL_TRANSPARENT);
+    for (int x = 0; x < 16; ++x)
+    {
+        for (int y = 6; y < 10; ++y)
+        {
+            set_pattern_pixel(PAT_BAT_STONE, x, y, COL_STONE);
+        }
+    }
+    for (int y = 4; y < 12; ++y)
+    {
+        for (int x = 6; x < 10; ++x)
+        {
+            set_pattern_pixel(PAT_BAT_STONE, x, y, COL_STONE);
+        }
+    }
+
+    // 矢: 横向きと縦向き。
+    fill_pattern(PAT_ARROW_H, COL_TRANSPARENT);
+    for (int x = 2; x < 14; ++x)
+    {
+        set_pattern_pixel(PAT_ARROW_H, x, 7, COL_ARROW);
+        set_pattern_pixel(PAT_ARROW_H, x, 8, COL_ARROW);
+    }
+    for (int i = 0; i < 4; ++i)
+    {
+        set_pattern_pixel(PAT_ARROW_H, 13 - i, 7 - i, COL_ARROW);
+        set_pattern_pixel(PAT_ARROW_H, 13 - i, 8 + i, COL_ARROW);
+    }
+
+    fill_pattern(PAT_ARROW_V, COL_TRANSPARENT);
+    for (int y = 2; y < 14; ++y)
+    {
+        set_pattern_pixel(PAT_ARROW_V, 7, y, COL_ARROW);
+        set_pattern_pixel(PAT_ARROW_V, 8, y, COL_ARROW);
+    }
+    for (int i = 0; i < 4; ++i)
+    {
+        set_pattern_pixel(PAT_ARROW_V, 7 - i, 3 + i, COL_ARROW);
+        set_pattern_pixel(PAT_ARROW_V, 8 + i, 3 + i, COL_ARROW);
+    }
+}
+
 // BG のセルに 1 個書く。
 //
 // ネームテーブルのワードはスプライトの属性と同じ形式
@@ -213,10 +315,60 @@ void video_put_player(int x, int y, int facing)
     put_sprite(1, x, y + 16, PAT_PLAYER_BOTTOM, facing);
 }
 
+// 硬化した敵は色を変えて、足場になっていることが見て分かるようにする。
+//
+// Why not 別のパターンを用意しないか: パレットブロックを変えるだけで
+// 済む。PCG の枠は余っているが、同じ絵の色違いのためにパターンを
+// 2 つ持つと、絵を直すときに両方を直す羽目になる。
+void video_put_enemy(int slot, int x, int y, int type, int hardened)
+{
+    int pattern;
+    if (type == 1)
+    {
+        pattern = hardened ? PAT_BAT_STONE : PAT_BAT;
+    }
+    else
+    {
+        pattern = hardened ? PAT_ENEMY_STONE : PAT_ENEMY;
+    }
+    const uint32_t base = SPR_REG_BASE + (uint32_t)(2 + slot) * 8u;
+    poke16(base + 0, (uint16_t)(x + SPR_COORD_OFFSET));
+    poke16(base + 2, (uint16_t)(y + SPR_COORD_OFFSET));
+    // 硬化中はパレットブロック 1 を使う。ブロック 1 の色は
+    // set_palette() が石の灰色で埋めてある。
+    poke16(base + 4, (uint16_t)pattern);
+    poke16(base + 6, 3);
+}
+
+void video_put_arrow(int slot, int x, int y, int dir)
+{
+    // dir: 1=右 2=左 3=上 4=下
+    const int vertical = (dir == 3 || dir == 4);
+    const int pattern = vertical ? PAT_ARROW_V : PAT_ARROW_H;
+    const int hflip = (dir == 2);
+    const int vflip = (dir == 4);
+
+    const uint32_t base = SPR_REG_BASE + (uint32_t)(5 + slot) * 8u;
+    poke16(base + 0, (uint16_t)(x + SPR_COORD_OFFSET));
+    poke16(base + 2, (uint16_t)(y + SPR_COORD_OFFSET));
+    poke16(base + 4, (uint16_t)(pattern | (hflip ? 0x0100 : 0) | (vflip ? 0x0200 : 0)));
+    poke16(base + 6, 3);
+}
+
+void video_hide_from(int first_index)
+{
+    // プライオリティ 0 は非表示。
+    for (int i = first_index; i < 16; ++i)
+    {
+        poke16(SPR_REG_BASE + (uint32_t)i * 8u + 6, 0);
+    }
+}
+
 void video_init(void)
 {
     set_palette();
     build_patterns();
+    build_actor_patterns();
 
     // BG0 を表示し、ネームテーブル 0 を使う。
     // bit0 = BG0 表示、bit1 = BG0 のネームテーブル番号。
