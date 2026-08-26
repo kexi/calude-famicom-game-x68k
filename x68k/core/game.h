@@ -63,6 +63,11 @@ typedef struct
     // 無敵の残り。2 フレームに 1 減るので、255 で約 8.5 秒。
     int star_timer;
 
+    // 取ったコイン。メタ列 0-63 のビットマップ。
+    uint8_t coin_taken[8];
+    // 取った枚数。30 枚ごとに 1UP。
+    int coins;
+
     uint8_t prev_buttons;
     uint32_t frame;
 } Game;

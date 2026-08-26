@@ -1130,6 +1130,85 @@ static void test_game_plays_jump_sfx(void)
     CHECK_EQ(g.sound.sfx, SFX_JUMP);
 }
 
+// --- コイン -----------------------------------------------------------------
+
+static void test_coin_map_matches_original(void)
+{
+    printf("コイン: 配置が原作と一致する\n");
+
+    // 1-1 の先頭バイトは $40 = bit6 -> メタ列 6 にコイン。
+    CHECK_EQ(level_has_coin(6), 1);
+    CHECK_EQ(level_has_coin(0), 0);
+    CHECK_EQ(level_has_coin(5), 0);
+}
+
+static void test_coin_pickup(void)
+{
+    printf("コイン: 通ると取れて、2 度は取れない\n");
+    level_set_stage(0);
+
+    Game g;
+    game_init(&g);
+    g.state = GS_PLAYING;
+
+    // 1-1 のメタ列 6 (x 96-111) にコインがある。
+    // プレイヤーの中心 (x+8) がそこへ入る位置に置く。
+    g.player.world_x = 6 * 16;
+    g.player.y_fixed = (int32_t)168 << 8;
+
+    const uint32_t before = g.score;
+    game_update(&g, 0);
+    CHECK_EQ(g.coins, 1);
+    CHECK(g.score > before);
+
+    // 同じ場所にいても 2 度は取れない。
+    const uint32_t after = g.score;
+    game_update(&g, 0);
+    CHECK_EQ(g.coins, 1);
+    CHECK_EQ(g.score, after);
+}
+
+static void test_coin_needs_right_height(void)
+{
+    printf("コイン: 高さが合わないと取れない\n");
+    level_set_stage(0);
+
+    Game g;
+    game_init(&g);
+    g.state = GS_PLAYING;
+    g.player.world_x = 6 * 16;
+    // コインの帯 (145-183) より上。
+    g.player.y_fixed = (int32_t)100 << 8;
+
+    game_update(&g, 0);
+    CHECK_EQ(g.coins, 0);
+}
+
+static void test_coins_reset_per_stage(void)
+{
+    printf("コイン: ステージが変わると取得済みが戻る\n");
+    level_set_stage(0);
+
+    Game g;
+    game_init(&g);
+    g.state = GS_PLAYING;
+    g.player.world_x = 6 * 16;
+    g.player.y_fixed = (int32_t)168 << 8;
+    game_update(&g, 0);
+    CHECK(g.coin_taken[0] != 0);
+
+    // クリアして次のステージへ。
+    g.player.world_x = WORLD_X_MAX;
+    g.boss.state = BOSS_ABSENT;
+    game_update(&g, 0);
+    for (int i = 0; i < STATE_TIME_CLEAR + 5 && g.stage == 0; ++i)
+    {
+        game_update(&g, 0);
+    }
+    CHECK_EQ(g.stage, 1);
+    CHECK_EQ(g.coin_taken[0], 0);
+}
+
 int main(void)
 {
     test_level_features();
@@ -1183,6 +1262,11 @@ int main(void)
     test_sfx_priority();
     test_sfx_uses_own_voice();
     test_game_plays_jump_sfx();
+
+    test_coin_map_matches_original();
+    test_coin_pickup();
+    test_coin_needs_right_height();
+    test_coins_reset_per_stage();
 
     printf("\n%d 件中 %d 件成功\n", g_checks, g_checks - g_failures);
     if (g_failures)

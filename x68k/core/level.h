@@ -23,6 +23,12 @@ void level_set_stage(int stage);
 // 現れる」という意図しない見え方を作るため。
 uint8_t level_feature_at(int32_t world_x);
 
+// コインの配置。1 ステージ 8 バイト = メタ列 0-63 のビットマップ。
+extern const uint8_t g_coin_maps[4][8];
+
+// そのメタ列にコインがあるか。
+int level_has_coin(int col);
+
 // 点 (world_x, y) を含むソリッドの上端 Y を返す。無ければ PROBE_NONE。
 //
 // 原作の probe_top (src/level.s:355) と同じ規則:

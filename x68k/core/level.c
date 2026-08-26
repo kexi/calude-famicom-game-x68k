@@ -7,7 +7,13 @@
 const uint8_t g_block_top[6] = {0, 184, 168, 144, 120, 0};
 const uint8_t g_block_bot[6] = {0, 200, 200, 160, 136, 0};
 
-static const uint8_t *s_map = g_level_maps[0];
+// ポインタではなくステージ番号で持つ。
+//
+// Why: ポインタを .data の初期値にすると、そこに再配置が要る。
+// このプログラムはそれまで .data に再配置を持っていなかったので、
+// 実際に「地面が描かれなくなる」形で壊れた (原因は未特定)。
+// 番号なら .data に何も置かずに済み、参照のたびに表を引くだけになる。
+static int s_stage_index = 0;
 
 void level_set_stage(int stage)
 {
@@ -15,7 +21,7 @@ void level_set_stage(int stage)
     {
         stage = 0;
     }
-    s_map = g_level_maps[stage];
+    s_stage_index = stage;
 }
 
 uint8_t level_feature_at(int32_t world_x)
@@ -29,7 +35,7 @@ uint8_t level_feature_at(int32_t world_x)
     {
         return FEAT_FLAT;
     }
-    return s_map[col];
+    return g_level_maps[s_stage_index][col];
 }
 
 uint8_t level_probe_top(int32_t world_x, int y)
@@ -66,4 +72,14 @@ uint8_t level_probe_top(int32_t world_x, int y)
     }
 
     return g_block_top[feature];
+}
+
+int level_has_coin(int col)
+{
+    if (col < 0 || col >= LEVEL_METACOLS)
+    {
+        return 0;
+    }
+    // 1 バイトに 8 列ぶん。原作の coin_bit_tbl と同じ並び (bit0 が左)。
+    return (g_coin_maps[s_stage_index][col >> 3] & (1u << (col & 7))) != 0;
 }

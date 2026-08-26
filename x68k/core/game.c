@@ -11,6 +11,10 @@
 #define SCORE_ITEM 5
 #define SCORE_CLEAR 10
 #define SCORE_BOSS 20
+#define SCORE_COIN 2
+
+// 何枚ごとに 1UP するか。
+#define COINS_PER_LIFE 30
 
 // 1 万点ごとにエクステンド。100 点単位なので 100 きざみ。
 #define EXTEND_STEP 100
@@ -48,6 +52,12 @@ static void start_stage(Game *g)
     item_init(&g->items);
     boss_init(&g->boss, g->stage);
     g->star_timer = 0;
+
+    // 取ったコインはステージごとに戻す。
+    for (int i = 0; i < 8; ++i)
+    {
+        g->coin_taken[i] = 0;
+    }
     sound_set_stage(&g->sound, g->stage);
 
     if (g->checkpoint)
@@ -78,6 +88,7 @@ void game_init(Game *g)
     g->score = 0;
     g->next_extend = EXTEND_STEP;
     g->checkpoint = 0;
+    g->coins = 0;
     g->prev_buttons = 0;
     g->frame = 0;
     sound_init(&g->sound);
@@ -276,6 +287,36 @@ void game_update_with_sound(Game *g, uint8_t buttons, SoundFrame *sound)
             item_spawn(&g->items, i, g->enemies.e[i].x);
             add_score(g, SCORE_DESTROY);
             sound_play_sfx(&g->sound, SFX_DEFEAT);
+        }
+    }
+
+    // コインを拾う。
+    //
+    // コインは BG に描かれていて実体を持たない。プレイヤーの中心が
+    // そのメタ列に入り、高さが合っていれば取れる。原作と同じ規則。
+    const int py = player_y(&g->player);
+    const int in_coin_band = py >= 145 && py < 184;
+    if (in_coin_band)
+    {
+        const int col = (int)((g->player.world_x + 8) >> 4) & 63;
+        const int already = (g->coin_taken[col >> 3] & (1u << (col & 7))) != 0;
+        if (!already && level_has_coin(col))
+        {
+            g->coin_taken[col >> 3] |= (uint8_t)(1u << (col & 7));
+            ++g->coins;
+            add_score(g, SCORE_COIN);
+            sound_play_sfx(&g->sound, SFX_COIN);
+
+            // 30 枚ごとに 1UP。
+            int n = g->coins;
+            while (n >= COINS_PER_LIFE)
+            {
+                n -= COINS_PER_LIFE;
+            }
+            if (n == 0 && g->lives < 9)
+            {
+                ++g->lives;
+            }
         }
     }
 

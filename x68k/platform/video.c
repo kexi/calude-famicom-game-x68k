@@ -312,6 +312,15 @@ void video_build_stage(void)
             }
         }
 
+        // コインを置く。原作は行 22 (y 176-183) なので、セル行 11。
+        //
+        // Why 専用のパターンを作らないか: アイテムと同じ絵で足りる。
+        // パターンを増やすと PCG の割り当てが動き、他の絵がずれる元になる。
+        if (level_has_coin(col))
+        {
+            set_bg_cell(col, 176 / BG_CELL_SIZE, PAT_ITEM);
+        }
+
         // ブロックを置く。上端 Y からセル行を求める。
         if (feature != FEAT_FLAT && feature != FEAT_PIT)
         {
@@ -445,4 +454,13 @@ void video_init(void)
     poke16(VC_DISPLAY, VC_DISPLAY_TEXT | VC_DISPLAY_SPRITE);
 
     video_set_scroll(0);
+}
+
+void video_clear_coin(int col)
+{
+    // 取ったコインは BG から消す。
+    //
+    // 原作は NMI で PPU へタイル 0 を書いていた。X68000 の BG は
+    // CPU からいつでも書けるので、キューに積む必要が無い。
+    set_bg_cell(col, 176 / BG_CELL_SIZE, PAT_EMPTY);
 }

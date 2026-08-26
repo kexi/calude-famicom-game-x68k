@@ -73,6 +73,7 @@ def main() -> int:
 
     text = args.source.read_text(encoding="utf-8")
     maps = parse_byte_rows(text, "level_maps", STAGES * METACOLS)
+    coins = parse_byte_rows(text, "coin_maps", STAGES * 8)
 
     # 値の正しさをここで確かめる。フィーチャは 0-5 しかない。
     for i, v in enumerate(maps):
@@ -97,6 +98,14 @@ def main() -> int:
             body = ", ".join(str(v) for v in row[chunk : chunk + 16])
             lines.append(f"        {body},")
         lines.append("    },")
+    lines.append("};")
+    lines.append("")
+    lines.append("// コインの配置。1 ステージ 8 バイト = メタ列 0-63 のビットマップ。")
+    lines.append(f"const uint8_t g_coin_maps[{STAGES}][8] = {{")
+    for s_ in range(STAGES):
+        row = coins[s_ * 8 : (s_ + 1) * 8]
+        body = ", ".join(f"0x{v:02X}" for v in row)
+        lines.append(f"    {{{body}}},  // 1-{s_ + 1}")
     lines.append("};")
     lines.append("")
 

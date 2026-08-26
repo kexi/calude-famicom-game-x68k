@@ -53,7 +53,14 @@ int main(void)
 
     _dos_print("CALUDE KODO X68000\r\n");
 
-    Game game;
+    // ゲームの状態はスタックではなく静的領域に置く。
+    //
+    // Why: Game は 256 バイトあり、main の他のローカルと合わせると
+    // 300 バイトを超える。Human68k が用意するスタックはそれほど広くなく、
+    // 実際にローカル変数を 1 つ足しただけで動かなくなった
+    // (絵が出ず、プロンプトへ戻ってしまう)。
+    // 大きな状態は bss へ置いて、スタックは呼び出しの分だけに使う。
+    static Game game;
     game_init(&game);
 
     video_init();
@@ -62,12 +69,13 @@ int main(void)
     video_set_stage(game.stage);
 
     int shown_stage = game.stage;
+    static uint8_t shown_coins[8];
 
     for (;;)
     {
         const uint8_t buttons = input_read();
 
-        SoundFrame sound;
+        static SoundFrame sound;
         game_update_with_sound(&game, buttons, &sound);
 
         // ステージが変わったら BG を組み直す。
@@ -75,6 +83,31 @@ int main(void)
         {
             video_set_stage(game.stage);
             shown_stage = game.stage;
+            for (int i = 0; i < 8; ++i)
+            {
+                shown_coins[i] = 0;
+            }
+        }
+
+        // 取ったコインを BG から消す。
+        //
+        // core は「取った」ことをビットで持つだけで画面を知らない。
+        // 前に消した分を覚えておいて、差分だけ書く。
+        for (int i = 0; i < 8; ++i)
+        {
+            const uint8_t fresh = (uint8_t)(game.coin_taken[i] & ~shown_coins[i]);
+            if (fresh == 0)
+            {
+                continue;
+            }
+            for (int b = 0; b < 8; ++b)
+            {
+                if (fresh & (1u << b))
+                {
+                    video_clear_coin(i * 8 + b);
+                }
+            }
+            shown_coins[i] = game.coin_taken[i];
         }
 
         const int32_t scroll = game_scroll(&game);

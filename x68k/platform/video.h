@@ -44,4 +44,7 @@ void video_hide_from(int first_index);
 // ステージを切り替える。BG を組み直す。
 void video_set_stage(int stage);
 
+// 取ったコインを BG から消す。
+void video_clear_coin(int col);
+
 #endif  // CALUDE_PLATFORM_VIDEO_H
