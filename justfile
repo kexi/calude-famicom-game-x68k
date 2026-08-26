@@ -103,6 +103,19 @@ run-hello: build-hello
       --hdd {{build}}/disk.hdf --cycles 900000000 --event-driven \
       --keys $'hello\n' --dump-text
 
+# 窓を出して実際に遊ぶ。
+#
+# 操作: A/D または矢印 = 左右、K = ジャンプ、J = 矢、ESC = 終了。
+#
+# x68k-play はエミュレータ側にある。SDL2 が要るので、無い環境では
+# エミュレータ側の just build-play が「作らない」と言って終わる。
+[doc('窓を出してゲームを遊ぶ')]
+play: build
+    just image {{build}}/GAME.X
+    cd {{emu}} && just build-play
+    {{emu}}/build-host/x68k-play --iplrom {{emu}}/rom/iplrom.dat \
+      --hdd {{justfile_directory()}}/{{build}}/disk.hdf --keys $'game\n'
+
 # ───── テスト ──────────────────────────────────────────────────────────────
 
 # core/ はプラットフォーム非依存の C なので、ホストの clang でそのまま
