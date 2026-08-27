@@ -52,7 +52,11 @@ typedef struct
 void enemy_init(EnemyWorld *w, int stage);
 
 // 1 フレーム進める。hitstop 中は呼ばれない (世界が止まる)。
-void enemy_update(EnemyWorld *w, const Player *p);
+//
+// scroll は「復活する敵をどこへ置くか」に要る。原作は画面右端の先
+// (scroll + 272) へ出す。これが無いと、倒した場所にそのまま湧いて
+// プレイヤーの真横に現れる。
+void enemy_update(EnemyWorld *w, const Player *p, int32_t scroll);
 
 // 硬化した敵が横移動を塞ぐか。
 int enemy_probe_solid(const EnemyWorld *w, const Player *p);

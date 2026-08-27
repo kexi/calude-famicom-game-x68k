@@ -168,7 +168,7 @@ static void update_floater(Enemy *e)
     e->y = ENEMY_GROUND - (int)kBobWave[phase];
 }
 
-void enemy_update(EnemyWorld *w, const Player *p)
+void enemy_update(EnemyWorld *w, const Player *p, int32_t scroll)
 {
     // frame_count はここで進める。
     //
@@ -212,6 +212,27 @@ void enemy_update(EnemyWorld *w, const Player *p)
                 if (e->type == ENEMY_FLOATER)
                 {
                     e->x = kSpawnX[s_stage][i];
+                }
+                else
+                {
+                    // それ以外は画面右端の先から入ってくる。
+                    //
+                    // Why: 倒した場所にそのまま湧かせると、プレイヤーの
+                    // 真横や真上に現れて理不尽に死ぬ。実際それで
+                    // 「何も無いのに空中で死ぬ」という症状になった
+                    // (画面外の敵も当たり判定は動くので絵にも出ない)。
+                    // 原作 (src/enemy.s の @edge_respawn) と同じく
+                    // scroll + 272 へ置く。
+                    e->x = scroll + 272;
+                    if (e->x > WORLD_X_MAX)
+                    {
+                        // 世界の右端を越えるなら画面の左後方から。
+                        e->x = scroll - 24;
+                        if (e->x < 0)
+                        {
+                            e->x = 0;
+                        }
+                    }
                 }
                 e->flag = ENEMY_ALIVE;
                 e->y = ENEMY_GROUND;

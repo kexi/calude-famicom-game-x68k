@@ -276,7 +276,7 @@ void game_update_with_sound(Game *g, uint8_t buttons, SoundFrame *sound)
         was[i] = g->enemies.e[i].flag;
     }
 
-    enemy_update(&g->enemies, &g->player);
+    enemy_update(&g->enemies, &g->player, scroll);
     boss_update(&g->boss, &g->player);
 
     for (int i = 0; i < ENEMY_COUNT; ++i)

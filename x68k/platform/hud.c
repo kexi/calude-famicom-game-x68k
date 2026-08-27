@@ -194,7 +194,13 @@ void hud_draw(const Game *g)
 // 自動検証用の 1 行。画面の下端へ出す。
 void hud_debug_line(const Game *g)
 {
-    const int row = 30;
+    // HUD のすぐ下に出す。
+    //
+    // Why not 画面の下端 (行 30) か: 実機の LCD は 768x512 の一部を
+    // 切り出して映し、切り出し位置は「テキストを最後に書いた行」に
+    // 追従する。下端に書くと窓がそこまで下がり、ゲームの絵が画面の外へ
+    // 出る。実際それで画面が真っ黒になった。
+    const int row = 1;
 
     int y = player_y(&g->player);
     if (y < 0)
@@ -215,4 +221,16 @@ void hud_debug_line(const Game *g)
     put_char(16, row, (char)('0' + (g->lives > 9 ? 9 : g->lives)));
     put_char(17, row, ' ');
     put_char(18, row, (char)('0' + g->state));
+
+    // 敵 3 体の位置と状態。ホストと突き合わせるために出す。
+    //
+    // 「何も無いのに死ぬ」という症状を追うのに、画面の絵からは
+    // 敵が居るかどうかしか分からない。画面外に居る敵とも当たり判定は
+    // 動くので、座標そのものを出す。
+    for (int i = 0; i < ENEMY_COUNT; ++i)
+    {
+        const int col = 20 + i * 6;
+        put_num(col, row, (uint32_t)g->enemies.e[i].x, 4);
+        put_char(col + 4, row, (char)('0' + g->enemies.e[i].flag));
+    }
 }

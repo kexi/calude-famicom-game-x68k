@@ -92,6 +92,22 @@ else
     fail=1
 fi
 
+echo "e2e: 歩いてブロックを跳び越える"
+# 1-1 のメタ列 13 (x=208-) に地上ブロックがある。跳ばないと越えられない。
+#
+# ここまで見るのは、「絵が出る」だけでは遊べることの証明にならないため。
+# 障害物を越えて先へ進めることまで確かめる。
+shot /tmp/e2e-run.ppm 420000000 --input-script "$here/x68k/test/play11.script"
+state=$(python3 "$here/x68k/tools/readhud.py" /tmp/e2e-run.ppm | head -1)
+px=$(echo "$state" | awk '{print $1}')
+alive=$(echo "$state" | awk '{print $4}')
+if [[ "$px" =~ ^0[0-9]+$ ]] && (( 10#$px > 250 )) && [[ "$alive" == "1" ]]; then
+    echo "  ok   ブロックを越えて x=$px まで進んだ"
+else
+    echo "  FAIL 進めていない (state=$state)"
+    fail=1
+fi
+
 if [[ $fail -ne 0 ]]; then
     echo "e2e: 失敗あり"
     exit 1

@@ -403,7 +403,7 @@ static void test_harden_ticks_every_other_frame(void)
     // 20 フレーム進めると、減るのは約半分。
     for (int i = 0; i < 20; ++i)
     {
-        enemy_update(&w, &p);
+        enemy_update(&w, &p, 0);
     }
     const int elapsed = start - w.e[0].timer;
     CHECK(elapsed >= 9 && elapsed <= 11);
@@ -622,6 +622,42 @@ static void test_deep_contact_kills(void)
     CHECK_EQ(p.alive, 0);
 }
 
+// 倒した敵が、プレイヤーの近くに湧かないこと。
+//
+// 倒した場所にそのまま復活させていたら、跳んだ先に現れて
+// 「何も無いのに空中で死ぬ」という症状になった。画面外の敵とも
+// 当たり判定は動くので、絵を見ても分からない種類の不具合だった。
+static void test_respawn_is_offscreen(void)
+{
+    printf("敵: 復活は画面の外から\n");
+    level_set_stage(0);
+
+    EnemyWorld w;
+    enemy_init(&w, 0);
+    for (int i = 1; i < ENEMY_COUNT; ++i)
+    {
+        w.e[i].flag = ENEMY_GONE;
+    }
+
+    // 敵をプレイヤーの近くで倒した状態にする。
+    w.e[0].type = ENEMY_WALKER;
+    w.e[0].flag = ENEMY_WAITING;
+    w.e[0].x = 200;
+    w.e[0].timer = 1;
+
+    Player p;
+    player_init(&p);
+    p.world_x = 200;
+
+    // 復活まで進める。カメラは 100 の位置にあるとする。
+    const int32_t scroll = 100;
+    enemy_update(&w, &p, scroll);
+
+    CHECK_EQ(w.e[0].flag, ENEMY_ALIVE);
+    // 画面 (scroll..scroll+256) の右外に出ている。
+    CHECK(w.e[0].x >= scroll + 256);
+}
+
 static void test_walker_turns_at_pit(void)
 {
     printf("敵: 歩く敵は穴で折り返す\n");
@@ -645,7 +681,7 @@ static void test_walker_turns_at_pit(void)
 
     for (int i = 0; i < 200; ++i)
     {
-        enemy_update(&w, &p);
+        enemy_update(&w, &p, 0);
     }
 
     // 穴には落ちず、右向きへ折り返している。
@@ -1234,6 +1270,7 @@ int main(void)
     test_stomp_with_a_jumps_higher();
     test_deep_contact_kills();
     test_walker_turns_at_pit();
+    test_respawn_is_offscreen();
 
     test_arrow_fires_in_facing_direction();
     test_arrow_limit_by_weapon();
