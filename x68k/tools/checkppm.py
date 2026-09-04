@@ -23,24 +23,30 @@ import argparse
 import sys
 from pathlib import Path
 
-# ゲームが使う色 (video.c の grb() が作る RGB565 → PPM の 8bit)。
-# 完全一致で数える。近い色を許すと、別のものを数えて「出ている」に
-# 見えてしまう。
-COLORS = {
-    "sky": (0x00, 0x00, 0x00),
-    "grass": (0x31, 0xC6, 0x41),
-    "dirt": (0x94, 0x55, 0x20),
-    "block": (0xC5, 0x95, 0x41),
-    "skin": (0xFF, 0xB6, 0x83),
-    "cloth": (0xE6, 0x44, 0x41),
-    "enemy": (0xD6, 0x31, 0xA5),
-    "stone": (0x84, 0x84, 0x84),
-    "arrow": (0xF7, 0xE7, 0xA6),
-    "item": (0xFF, 0xFF, 0x31),
-    # HUD の文字。テキスト画面のパレット番号 1。
-    "text": (0x10, 0x1C, 0x62),
-}
+# 原作NESパレットを、本番のGRB555→RGB565→PPMと同じ色空間へ写す。
+from mksprites import NES_RGB
 
+
+def nes_ppm_color(index: int) -> tuple[int, int, int]:
+    red, green, blue = NES_RGB[index]
+    return ((red >> 3) * 255 // 31,
+            (((green >> 3) << 1) | 1) * 255 // 63,
+            (blue >> 3) * 255 // 31)
+
+
+COLORS = {
+    "sky": (0, 0, 0),
+    "grass": nes_ppm_color(0x37),
+    "dirt": nes_ppm_color(0x16),
+    "block": nes_ppm_color(0x01),
+    "skin": nes_ppm_color(0x36),
+    "cloth": nes_ppm_color(0x25),
+    "enemy": nes_ppm_color(0x12),
+    "stone": nes_ppm_color(0x10),
+    "arrow": nes_ppm_color(0x27),
+    "item": nes_ppm_color(0x30),
+    "text": nes_ppm_color(0x17),
+}
 
 def read_ppm(path: Path) -> tuple[int, int, bytes]:
     data = path.read_bytes()
@@ -136,7 +142,8 @@ def main() -> int:
         # 画素の正確な変換はmkspritesのユニットテストが担う。
         "title": (
             title_colored > 15000
-            and title_colors >= 8
+            # ロゴの色循環で7色になる相がある。OSカーソルの余計な1色を要求しない。
+            and title_colors >= 7
             and min(title_quadrants) > 1000
         ),
         # ラウンド画面は左上に台詞、右下にタイトルから切り出した顔がある。

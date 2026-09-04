@@ -28,6 +28,9 @@ void video_show_title(void);
 
 // 原作の台詞と顔を使ったラウンド開始画面を表示する。
 void video_show_round(int stage);
+void video_show_ending(void);
+void video_animate_scene(int is_title, int frame, int phase, int fade, int exiting, int selection,
+                         int lives);
 
 // タイトルメニューの選択カーソルを置く。
 void video_put_title_cursor(int selection);
@@ -62,6 +65,7 @@ void video_put_item(int slot, int x, int y, int kind);
 
 // ボスを置く。32x32 = スプライト 4 枚。
 void video_put_boss(int x, int y, int flashing);
+void video_put_effect(int x, int y, int timer, int flash);
 
 // 使わなかったスプライトを消す。毎フレーム最後に呼ぶ。
 void video_hide_from(int first_index);

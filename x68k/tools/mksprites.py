@@ -116,7 +116,8 @@ def parse_label_data(path: Path, label: str) -> bytes:
         raise ValueError(f"ラベルが見つかりません: {label}")
 
     values = bytearray()
-    for raw_line in lines[start + 1 :]:
+    body = [lines[start].split(":", 1)[1], *lines[start + 1 :]]
+    for raw_line in body:
         line = raw_line.split(";", 1)[0].strip()
         if not line:
             continue
@@ -199,6 +200,12 @@ def actor_patterns(sprite_chr: bytes) -> list[bytes]:
         (0xCA, 0xCB, 0xCE, 0xCF),
     ):
         patterns.append(pack_pattern(sprite_chr, tiles, ENEMY_COLORS))
+    for tile in (0x4C, 0x4D):
+        patterns.append(pack_pattern(sprite_chr, (tile, None, None, None), ENEMY_COLORS))
+    for tile in (0x6C, 0x6E):
+        patterns.append(pack_pattern(sprite_chr, (tile, tile + 1, tile + 16, tile + 17), ENEMY_COLORS))
+    patterns.append(pack_pattern(sprite_chr, (0x5F, None, None, None), PLAYER_COLORS))
+    patterns.append(pack_pattern(sprite_chr, (0x5E, None, None, None), ENEMY_COLORS))
     return patterns
 
 
@@ -275,7 +282,8 @@ def title_bitmap(title_chr: bytes, nametable: bytes) -> list[bytes]:
             palette = (attribute >> shift) & 3
             bank = 0 if tile_y < 17 else 1
             tile = bank * 256 + nametable[tile_y * 32 + tile_x]
-            color = palette * 4 + decoded[tile][y & 7][x & 7]
+            pixel = decoded[tile][y & 7][x & 7]
+            color = palette * 4 + pixel if pixel else 0
             if x % 2 == 0:
                 row[x // 2] = color << 4
             else:
@@ -300,7 +308,7 @@ def title_cursor_pattern(title_chr: bytes) -> bytes:
     return bytes(out)
 
 
-def round_bitmap(sprite_chr: bytes, title: list[bytes], dialog: bytes) -> list[bytes]:
+def round_bitmap(sprite_chr: bytes, title: list[bytes], dialog: bytes, stage: int = 0) -> list[bytes]:
     """原作のラウンド画面を256x240・4bppの走査線へ組み立てる。"""
     pixels = [bytearray(256) for _ in range(240)]
 
@@ -325,6 +333,19 @@ def round_bitmap(sprite_chr: bytes, title: list[bytes], dialog: bytes) -> list[b
     for column in range(32):
         put_tile(0x8D, column, 13)
 
+    def sprite(tile: int, x: int, y: int) -> None:
+        for dy, row in enumerate(decode_tile(sprite_chr, tile)):
+            for dx, color in enumerate(row):
+                if color:
+                    pixels[y + dy][x + dx] = (0, 2, 11, 1)[color]
+
+    for index, char in enumerate("STAGE"):
+        sprite(ord(char) + 0x60, 108 + index * 8, 25)
+    for index, tile in enumerate((0x91, 0x8D, 0x91 + stage)):
+        sprite(tile, 116 + index * 8, 41)
+    sprite(0x5F, 108, 89)
+    sprite(0xB8, 120, 90)
+
     # タイトルの行4〜16・列20〜31を、原作と同じ位置へ移す。
     for source_y in range(32, 136):
         destination = pixels[source_y + 96]
@@ -345,6 +366,46 @@ def round_bitmap(sprite_chr: bytes, title: list[bytes], dialog: bytes) -> list[b
 def grb555(nes_color: int) -> int:
     r, g, b = NES_RGB[nes_color]
     return ((g >> 3) << 11) | ((r >> 3) << 6) | ((b >> 3) << 1) | 1
+
+
+def eye_frames(title_chr: bytes, title: list[bytes], source: Path) -> list[list[bytes]]:
+    """OAM優先順・透明色を保ち、開/半/閉/ウィンクの32x24領域を合成する。"""
+    opened = parse_label_data(source, "title_eye_open")
+    closed = parse_label_data(source, "title_eye_spr")
+    half = parse_label_data(source, "title_eye_half")
+    frames = []
+    for oam in (opened, half, closed, closed[:12] + opened[:12]):
+        pixels = [[(title[y][x // 2] >> (0 if x & 1 else 4)) & 15
+                   for x in range(184, 216)] for y in range(56, 80)]
+        # NESは小さいOAM番号が前面になる。
+        for offset in reversed(range(0, len(oam), 4)):
+            y, tile, attr, x = oam[offset:offset + 4]
+            colors = (0, 1, 2, 4 if (attr & 3) == 1 else 0)
+            for dy, row in enumerate(decode_tile(title_chr, tile)):
+                for dx, color in enumerate(row):
+                    if color:
+                        pixels[y + 1 + dy - 56][x + dx - 184] = colors[color]
+        frames.append([bytes((row[x] << 4) | row[x + 1] for x in range(0, 32, 2))
+                       for row in pixels])
+    return frames
+
+
+def ending_bitmap(background_chr: bytes, source: Path) -> list[bytes]:
+    """原作の行テーブルから文字・位置・色を取り込む。"""
+    text = source.read_text(encoding="utf-8")
+    pixels = [bytearray(256) for _ in range(240)]
+    for hi, lo, label in re.findall(r"\.byte\s+\$(\w+),\$(\w+),\s*<(end_txt\d+)", text):
+        cell = ((int(hi, 16) << 8) | int(lo, 16)) - 0x2000
+        values = re.search(rf"^{label}:\s*\.byte\s+([^\n]+)", text, re.MULTILINE)
+        assert values is not None
+        for index, token in enumerate(values[1].split(",")):
+            tile = parse_value(token)
+            if tile == 0:
+                break
+            for dy, row in enumerate(decode_tile(background_chr, tile)):
+                for dx, color in enumerate(row):
+                    pixels[(cell // 32) * 8 + dy][(cell % 32 + index) * 8 + dx] = 4 if color else 0
+    return [bytes((row[x] << 4) | row[x + 1] for x in range(0, 256, 2)) for row in pixels]
 
 
 def game_palettes() -> list[list[int]]:
@@ -411,6 +472,7 @@ def main() -> int:
     parser.add_argument("roundtext", type=Path)
     parser.add_argument("title_screen", type=Path)
     parser.add_argument("title_chr", type=Path)
+    parser.add_argument("state", type=Path)
     parser.add_argument("out", type=Path)
     args = parser.parse_args()
 
@@ -429,7 +491,7 @@ def main() -> int:
     title_palette_numbers = parse_label_bytes(args.title_screen, "title_img_palette", 16)
     title = title_bitmap(title_chr, title_nt)
     rounds = [
-        round_bitmap(sprite_chr, title, parse_label_data(args.roundtext, f"round_dlg{stage}"))
+        round_bitmap(sprite_chr, title, parse_label_data(args.roundtext, f"round_dlg{stage}"), stage)
         for stage in range(4)
     ]
     cursor = title_cursor_pattern(title_chr)
@@ -444,7 +506,43 @@ def main() -> int:
         cursor,
         title_palette,
     )
+    extra: list[str] = []
+    format_pattern_array(extra, "g_nes_ending_bitmap", ending_bitmap(background_chr, args.state))
+    extra.append("const uint8_t g_nes_eyes[4][24][16] = {")
+    for frame in eye_frames(title_chr, title, args.title_screen):
+        extra.append("    {")
+        extra.extend("        {" + ", ".join(str(v) for v in row) + "}," for row in frame)
+        extra.append("    },")
+    extra.append("};")
+    extra.append("const uint16_t g_nes_title_fades[8][16] = {")
+    for step in range(8):
+        colors = [grb555(c - step * 16 if c - step * 16 >= 15 else 0x0F)
+                  for c in title_palette_numbers]
+        extra.append("    {" + ", ".join(str(v) for v in colors) + "},")
+    extra.append("};")
+    extra.append("const uint16_t g_nes_logo_fades[8][8] = {")
+    for fade in range(8):
+        colors = (0x27, 0x37, 0x28, 0x38, 0x27, 0x17, 0x07, 0x17)
+        extra.append("    {" + ", ".join(str(grb555(c - fade * 16 if c - fade * 16 >= 15 else 15)) for c in colors) + "},")
+    extra.append("};")
+    extra.append("const uint8_t g_nes_digits[10][8] = {")
+    for digit in range(10):
+        glyph = decode_tile(sprite_chr, 0x90 + digit)
+        extra.append("    {" + ", ".join(str(sum((p != 0) << (7 - x) for x, p in enumerate(row))) for row in glyph) + "},")
+    extra.append("};")
+    extra.append("const uint8_t g_nes_font[64][8] = {")
+    for char in range(64):
+        glyph = decode_tile(sprite_chr, 0x80 + char)
+        extra.append("    {" + ", ".join(str(sum((p != 0) << (7 - x) for x, p in enumerate(row))) for row in glyph) + "},")
+    extra.append("};")
+    generated += "\n" + "\n".join(extra) + "\n"
     args.out.write_text(generated, encoding="utf-8")
+    music = ["// Generated from src/sound.s; do not edit."]
+    for label in ("bass_pat_title", "melody_title", "bass_pat_game", "fanfare_pat", "go_pat"):
+        values = parse_label_data(args.state.with_name("sound.s"), label)
+        music.append(f"static const uint8_t kNes_{label}[{len(values)}] = {{" +
+                     ", ".join(str(v) for v in values) + "};")
+    args.out.with_name("music.inc.h").write_text("\n".join(music) + "\n")
     print(
         f"{args.out} を生成しました "
         f"(背景{len(background)} + アクター{len(actor)} PCG + "

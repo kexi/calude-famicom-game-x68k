@@ -48,7 +48,7 @@ class MakeSpritesTest(unittest.TestCase):
 
         patterns = mksprites.actor_patterns(data)
 
-        self.assertEqual(len(patterns), 39)
+        self.assertEqual(len(patterns), 45)
         self.assertTrue(any(patterns[0]))
         self.assertTrue(any(patterns[-1]))
 

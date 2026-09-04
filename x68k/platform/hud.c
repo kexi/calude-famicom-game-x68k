@@ -107,14 +107,8 @@ static void put_char(int col, int row, char c)
             bits = (uint8_t)(kGlyphs[index][y - 4] << 2);
         }
         poke8(base + (uint32_t)y * TVRAM_BYTES_PER_LINE, bits);
-    }
-}
-
-static void put_text(int col, int row, const char *s)
-{
-    for (int i = 0; s[i] != '\0'; ++i)
-    {
-        put_char(col + i, row, s[i]);
+        for (uint32_t plane = 1; plane < 4; ++plane)
+            poke8(base + plane * TVRAM_PLANE_SIZE + (uint32_t)y * TVRAM_BYTES_PER_LINE, 0);
     }
 }
 
@@ -137,90 +131,102 @@ static void put_num(int col, int row, uint32_t value, int digits)
     }
 }
 
+static int cached_state = -1;
+static int cached_lives, cached_coins, cached_paused;
+static uint32_t cached_score;
+static uint8_t cached_tens;
+
 void hud_clear(void)
 {
-    // プレーン 0 だけ消す。他のプレーンには書いていない。
-    for (uint32_t off = 0; off < TVRAM_PLANE_SIZE; off += 2u)
+    cached_state = -1;
+    for (uint32_t off = 0; off < TVRAM_PLANE_SIZE * 4u; off += 2u)
     {
         poke16(TVRAM + off, 0);
     }
 }
 
-void hud_draw(const Game *g)
+extern const uint8_t g_nes_font[64][8];
+
+static void nes_char(int x, int y, char c, int color)
 {
-    if (g->state == GS_TITLE)
-    {
-        return;
-    }
-
-    if (g->state == GS_ENDING)
-    {
-        put_text(8, 6, "CONGRATULATIONS!");
-        put_text(5, 10, "ALL KETSUIMAN DEFEATED");
-        put_text(9, 12, "BY YOUR ACTION");
-        put_text(10, 18, "PRESENTED BY");
-        put_text(7, 20, "GOROMAN AND CLAUDE");
-        put_text(12, 24, "THE END");
-        put_text(11, 27, "PRESS START");
-        return;
-    }
-
-    if (g->state == GS_ROUND)
-    {
-        put_text(13, 1, "STAGE");
-        put_text(14, 2, "1-");
-        put_char(16, 2, (char)('1' + g->stage));
-        put_text(11, 5, "KARYUDO X");
-        put_num(21, 5, (uint32_t)(g->lives > 9 ? 9 : g->lives), 1);
-        return;
-    }
-
-    // 上端の行。残機とスコア。
-    put_text(1, 0, "LIFE");
-    put_num(6, 0, (uint32_t)(g->lives > 9 ? 9 : g->lives), 1);
-
-    put_text(9, 0, "SCORE");
-    // スコアは 100 点単位で持っている。表示は末尾に 00 を付ける。
-    put_num(15, 0, g->score, 4);
-    put_text(19, 0, "00");
-
-    put_text(24, 0, "STAGE");
-    put_char(30, 0, '1');
-    put_char(31, 0, '-');
-    put_char(32, 0, (char)('1' + g->stage));
-
-    // 状態に応じた表示。プレイ中は何も出さない。
-    //
-    // 原作は NES の 8 スプライト/ライン制限のせいで "STAGE CLEAR!" を
-    // 2 行に割っていた。テキスト画面ならその制約が無いので 1 行で出る。
-    const int row = 8;
-    for (int i = 0; i < 20; ++i)
-    {
-        put_char(6 + i, row, ' ');
-    }
-    if (g->paused)
-    {
-        put_text(13, row, "PAUSE");
-        return;
-    }
-
-    switch (g->state)
-    {
-        case GS_CLEAR:
-            put_text(9, row, "STAGE CLEAR!");
-            break;
-        case GS_DYING:
-            put_text(12, row, "MISS");
-            break;
-        case GS_GAMEOVER:
-            put_text(10, row, "GAME OVER");
-            break;
-        default:
-            break;
-    }
+    const int index = c >= 32 && c < 96 ? c - 32 : 0;
+    for (int dy = 0; dy < 8; ++dy)
+        for (int dx = 0; dx < 8; ++dx)
+        {
+            const uint32_t offset =
+                (uint32_t)(y + dy) * TVRAM_BYTES_PER_LINE + (uint32_t)(x + dx) / 8u;
+            const uint8_t mask = (uint8_t)(128u >> ((x + dx) & 7));
+            const int opaque = (g_nes_font[index][dy] & (128u >> dx)) != 0;
+            for (int plane = 0; plane < 3; ++plane)
+            {
+                const uint32_t addr = TVRAM + (uint32_t)plane * TVRAM_PLANE_SIZE + offset;
+                const uint8_t previous = peek8(addr);
+                const int ink = opaque && (color & (1 << plane));
+                poke8(addr, ink ? previous | mask : previous & (uint8_t)~mask);
+            }
+        }
 }
 
-// 自動検証用の 1 行。画面の下端へ出す。
+static void nes_text(int x, int y, const char *text, int color)
+{
+    for (int i = 0; text[i]; ++i) nes_char(x + i * 8, y, text[i], color);
+}
+
+void hud_draw(const Game *g)
+{
+    const int unchanged = cached_state == g->state && cached_lives == g->lives &&
+                          cached_coins == g->coins && cached_score == g->score &&
+                          cached_tens == g->score_tens && cached_paused == g->paused;
+    if (unchanged) return;
+    cached_state = g->state;
+    cached_lives = g->lives;
+    cached_coins = g->coins;
+    cached_score = g->score;
+    cached_tens = g->score_tens;
+    cached_paused = g->paused;
+    nes_char(18, 16, (char)('0' + g->lives), 3);
+    int coins = g->coins;
+    while (coins >= 100) coins -= 100;
+    int tens = 0;
+    while (coins >= 10)
+    {
+        coins -= 10;
+        ++tens;
+    }
+    nes_char(224, 16, (char)('0' + tens), 3);
+    nes_char(232, 16, (char)('0' + coins), 3);
+    uint32_t score = g->score;
+    static const uint32_t places[4] = {1000, 100, 10, 1};
+    for (int i = 0; i < 4; ++i)
+    {
+        int digit = 0;
+        while (score >= places[i] && digit < 9)
+        {
+            score -= places[i];
+            ++digit;
+        }
+        nes_char(96 + i * 8, 25, (char)('0' + digit), 3);
+    }
+    nes_char(128, 25, (char)('0' + g->score_tens), 3);
+    nes_char(136, 25, '0', 3);
+    nes_text(104, 93, "      ", 6);
+    nes_text(104, 107, "      ", 6);
+    nes_text(96, 101, "        ", 6);
+    nes_text(108, 113, "     ", 3);
+    const int cleared = g->state == GS_CLEAR;
+    const int over = g->state == GS_GAMEOVER;
+    if (cleared)
+    {
+        nes_text(108, 93, "STAGE", 6);
+        nes_text(104, 107, "CLEAR!", 6);
+    }
+    else if (over)
+        nes_text(96, 101, "GAMEOVER", 6);
+    else if (g->paused)
+        nes_text(108, 113, "PAUSE", 3);
+}
+
+// 自動検証用の 1 行。原作HUDの上に出す。
 void hud_debug_line(const Game *g)
 {
     // HUD のすぐ下に出す。
@@ -229,7 +235,7 @@ void hud_debug_line(const Game *g)
     // 切り出して映し、切り出し位置は「テキストを最後に書いた行」に
     // 追従する。下端に書くと窓がそこまで下がり、ゲームの絵が画面の外へ
     // 出る。実際それで画面が真っ黒になった。
-    const int row = 1;
+    const int row = 0;
 
     int y = player_y(&g->player);
     if (y < 0)

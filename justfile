@@ -35,7 +35,9 @@ default:
 # 実行ファイルに GOT は無いので、実行時に GOT を引いた先が全部 0 になり、
 # 関数ポインタが 0 になって「PC=$000002 で halt」という形で落ちる。
 # X 形式は再配置表で絶対番地を直す仕組みなので、PIC は不要かつ有害。
-cflags := "-m68000 -O2 -fomit-frame-pointer -ffreestanding -nostdlib -fno-builtin -fno-common -fno-pic -fno-PIC -fno-stack-protector -Wall -Wextra"
+# GCCのstore-mergingが奇数オフセットの隣接byteをwordへまとめるため無効化。
+# 初代68000は奇数番地のwordアクセスをアドレスエラーにする。
+cflags := "-m68000 -mstrict-align -O2 -fno-store-merging -fomit-frame-pointer -ffreestanding -nostdlib -fno-builtin -fno-common -fno-pic -fno-PIC -fno-stack-protector -Wall -Wextra"
 
 # リンクは gcc ではなく ld を直に呼ぶ。
 #
@@ -64,18 +66,21 @@ assets:
     python3 x68k/tools/mklevels.py assets/levels.s x68k/assets/levels.inc.c
     python3 x68k/tools/mksprites.py \
       assets/sprites.s assets/chr.s assets/roundtext.s assets/title_screen.s \
-      assets/title_chr.s x68k/assets/sprites.inc.c
+      assets/title_chr.s src/state.s x68k/assets/sprites.inc.c
+    PYTHONDONTWRITEBYTECODE=1 python3 x68k/tools/mkaudio.py assets/drums.s x68k/assets/drums.inc.h
 
 [doc('ゲーム本体 (GAME.X) をビルドする')]
-build: assets
+build debug="0": assets
     mkdir -p {{ build }}
     for f in {{ game_srcs }}; do \
       o={{ build }}/$(basename $f | tr '.' '_').o; \
-      {{ cross }}-gcc {{ cflags }} -c $f -o $o || exit 1; \
+      {{ cross }}-gcc {{ cflags }} -DCALUDE_DEBUG_HUD={{ debug }} -c $f -o $o || exit 1; \
     done
     {{ cross }}-ld --emit-relocs -n -T x68k/ld/game.ld \
       -o {{ build }}/game.elf {{ build }}/*_S.o {{ build }}/*_c.o \
       $({{ cross }}-gcc -m68000 -print-libgcc-file-name)
+    # 配布libgccの除算ヘルパーは68020命令を含むため混入を禁止する。
+    if {{ cross }}-nm {{ build }}/game.elf | rg '__.*(div|mod)'; then exit 1; fi
     python3 x68k/tools/elf2x.py {{ build }}/game.elf {{ build }}/GAME.X
 
 [doc('ゲームをエミュレータで走らせる')]
@@ -150,9 +155,37 @@ solve:
     ./{{ build }}/solve
 
 [doc('エミュレータ上で実際に動かして状態を検査する')]
-e2e: build
+e2e: (build "1") render-runner
     just image {{ build }}/GAME.X
     X68K_STACKCHAN={{ emu }} BUILD_DIR={{ build }} bash x68k/test/e2e.sh
+
+# エミュレータの既存描画器を利用してBG・スプライトも撮影可能にする。
+render-runner:
+    python3 x68k/tools/mkrender_runner.py {{ emu }} {{ build }}
+
+# 撮影した画面の色分布と指定要素の表示を確認する。
+check-shot PPM EXPECT="title":
+    python3 x68k/tools/checkppm.py {{ PPM }} --expect {{ EXPECT }} --dump
+
+# 通常版をHuman68kで起動し、macOS標準sipsで256x240のタイトル画面を保存する。
+screenshot-title: build render-runner
+    just image {{ build }}/GAME.X
+    {{ build }}/x68k-render-run --iplrom {{ emu }}/rom/iplrom.dat \
+      --hdd {{ build }}/disk.hdf --cycles 390000000 --event-driven \
+      --keys $'game\n' --ppm {{ build }}/title-full.ppm > {{ build }}/title-capture.log 2>&1
+    python3 x68k/tools/checkppm.py {{ build }}/title-full.ppm --expect title
+    sips -s format png \
+      {{ build }}/title-full.ppm --out {{ build }}/title.png
+
+# 実際の描画コードとエミュレータを接続し、各場面の256x240画像を検証する。
+test-video: assets
+    mkdir -p {{ build }}/visual
+    for f in x68k/platform/video.c x68k/platform/hud.c x68k/platform/audio.c x68k/core/level.c x68k/assets/levels.inc.c x68k/assets/sprites.inc.c; do \
+      clang -O1 -DCALUDE_HOST_VIDEO -c $f -o {{ build }}/visual/$(basename $f).o || exit 1; \
+    done
+    clang++ -std=c++17 -O1 -DCALUDE_HOST_VIDEO -I{{ emu }}/src/x68k/core -I{{ emu }}/src/x68k/core/cpu \
+      x68k/test/test_video.cpp {{ build }}/visual/*.o {{ emu }}/build-host/libx68k_core.a -o {{ build }}/test-video
+    ./{{ build }}/test-video {{ build }}/visual
 
 # ───── lint / format ───────────────────────────────────────────────────────
 
@@ -163,15 +196,19 @@ e2e: build
 # 「データが変わった」なのか「整形が違う」なのか区別できなくなる。
 [doc('C とアセンブラを整形する')]
 fmt:
-    fd -e c -e h -E '*.inc.c' . x68k --exec clang-format -i
+    fd -e c -e h -e cpp -E '*.inc.c' -E '*.inc.h' . x68k --exec clang-format -i
 
 [doc('整形されているかを検査する (書き換えない)')]
 fmt-check:
-    fd -e c -e h -E '*.inc.c' . x68k --exec clang-format --dry-run --Werror
+    fd -e c -e h -e cpp -E '*.inc.c' -E '*.inc.h' . x68k --exec clang-format --dry-run --Werror
 
 [doc('シークレットスキャンを全履歴に対して回す')]
 gitleaks:
     gitleaks git --no-banner --redact
+
+# 未コミットの新規ファイルも含めて公開前に検査する。
+gitleaks-worktree:
+    gitleaks dir x68k --no-banner --redact
 
 # ───── 後始末 ──────────────────────────────────────────────────────────────
 

@@ -22,6 +22,7 @@
 
 void _dos_print(const char *s);
 int _dos_super(int stack);
+void _iocs_cursor_off(void);
 
 // GPIP4 は垂直帰線中に L になる (アクティブ L)。
 //
@@ -84,7 +85,7 @@ static int player_pose(const Game *game, uint8_t buttons, uint8_t *animation_tim
         {
             return VIDEO_POSE_JUMP_RISE;
         }
-        if (game->player.vel_y == 0)
+        if (game->player.vel_y < 256)
         {
             return VIDEO_POSE_JUMP_APEX;
         }
@@ -97,7 +98,8 @@ static int player_pose(const Game *game, uint8_t buttons, uint8_t *animation_tim
         return VIDEO_POSE_STAND;
     }
 
-    ++*animation_timer;
+    const int animate = !game->paused && game->enemies.hitstop == 0;
+    if (animate) ++*animation_timer;
     return VIDEO_POSE_RUN_1 + ((*animation_timer >> 2) & 3u);
 }
 
@@ -107,6 +109,7 @@ int main(void)
     _dos_super(0);
 
     _dos_print("CALUDE KODO X68000\r\n");
+    _iocs_cursor_off();
 
     // ゲームの状態はスタックではなく静的領域に置く。
     //
@@ -149,10 +152,11 @@ int main(void)
             else if (game.state == GS_ROUND)
             {
                 video_show_round(game.stage);
+                for (int i = 0; i < 8; ++i) shown_coins[i] = 0;
             }
             else if (game.state == GS_ENDING)
             {
-                video_clear_scene();
+                video_show_ending();
             }
             else if (was_static_scene)
             {
@@ -204,26 +208,22 @@ int main(void)
 
         if (is_static_scene)
         {
-            if (game.state == GS_TITLE)
+            const int animated_scene = game.state == GS_TITLE || game.state == GS_ROUND;
+            if (animated_scene)
             {
-                video_put_title_cursor(game.title_selection);
-                video_hide_from(1);
+                video_animate_scene(game.state == GS_TITLE, (int)game.frame, game.blink_phase,
+                                    game.state == GS_TITLE ? game.title_fade : 0,
+                                    game.state == GS_TITLE ? game.title_exit : 0,
+                                    game.title_selection, game.lives);
             }
-            else
-            {
-                video_hide_from(0);
-            }
+            video_hide_from(0);
             audio_commit(&sound);
-            hud_draw(&game);
-            if (game.state == GS_ENDING)
-            {
-                hud_debug_line(&game);
-            }
             continue;
         }
 
         // プレイヤー。無敵中は 2 フレームに 1 回消して点滅させる。
-        const int blink = game.star_timer > 0 && (game.frame & 2u) != 0u;
+        const int blink =
+            (game.star_timer > 0 || game.state == GS_DYING) && (game.frame & 2u) != 0u;
         const int pose = player_pose(&game, buttons, &player_animation_timer);
         if (blink)
         {
@@ -249,10 +249,11 @@ int main(void)
                 video_put_enemy(i, -32, -32, e->type, 0, 0, 0);
                 continue;
             }
-            const int hurt = e->flag == ENEMY_DYING;
+            const int hurt = e->flag == ENEMY_DYING && e->type == ENEMY_WALKER;
+            const int stone = e->flag == ENEMY_HARDENED &&
+                              (e->timer >= 40 || (game.enemies.frame_count & 4u) == 0);
             const int wing_up = (game.enemies.frame_count & 8u) != 0u;
-            video_put_enemy(i, (int)(e->x - scroll), e->y, e->type, e->flag == ENEMY_HARDENED, hurt,
-                            wing_up);
+            video_put_enemy(i, (int)(e->x - scroll), e->y, e->type, stone, hurt, wing_up);
         }
 
         // 矢。
@@ -280,9 +281,10 @@ int main(void)
         }
 
         // ボス。
-        if (game.boss.state == BOSS_ALIVE)
+        if (game.boss.state != BOSS_ABSENT)
         {
-            const int flashing = game.boss.flash > 0 && (game.frame & 2u) != 0u;
+            const int flashing = (game.boss.flash & 2) != 0 ||
+                                 (game.boss.state == BOSS_DYING && (game.boss.timer & 2) != 0);
             video_put_boss((int)(game.boss.x - scroll), game.boss.y, flashing);
         }
         else
@@ -290,17 +292,20 @@ int main(void)
             video_put_boss(-64, -64, 1);
         }
 
-        video_hide_from(13);
+        video_put_effect((int)(game.enemies.fx_x - scroll), game.enemies.fx_y,
+                         game.enemies.fx_timer, game.enemies.kill_flash);
 
         // 音は絵と同じタイミングで反映する。
         audio_commit(&sound);
 
         hud_draw(&game);
 
-        // 自動検証用の 1 行。HUD のすぐ下に出す。
+        // 自動検証用の 1 行。HUD のすぐ上に出す。
         //
         // 画面の絵からは「跳んだのか」「どこで死んだのか」が読み取れない。
         // 座標と状態を数字で出しておくと、フレーム単位で追える。
+#if CALUDE_DEBUG_HUD
         hud_debug_line(&game);
+#endif
     }
 }

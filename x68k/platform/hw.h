@@ -57,6 +57,12 @@
 
 // --- 素のアクセス ----------------------------------------------------------
 
+#ifdef CALUDE_HOST_VIDEO
+void poke16(uint32_t addr, uint16_t value);
+uint16_t peek16(uint32_t addr);
+void poke8(uint32_t addr, uint8_t value);
+uint8_t peek8(uint32_t addr);
+#else
 static inline void poke16(uint32_t addr, uint16_t value) { *(volatile uint16_t *)addr = value; }
 
 static inline uint16_t peek16(uint32_t addr) { return *(volatile uint16_t *)addr; }
@@ -64,5 +70,6 @@ static inline uint16_t peek16(uint32_t addr) { return *(volatile uint16_t *)addr
 static inline void poke8(uint32_t addr, uint8_t value) { *(volatile uint8_t *)addr = value; }
 
 static inline uint8_t peek8(uint32_t addr) { return *(volatile uint8_t *)addr; }
+#endif
 
 #endif  // CALUDE_PLATFORM_HW_H

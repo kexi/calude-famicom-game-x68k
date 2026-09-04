@@ -48,11 +48,18 @@ typedef struct
     int lives;
     // 100 点単位。表示は末尾に 00 を付ける。
     uint32_t score;
+    uint8_t score_tens;
     // 次にエクステンドする点 (100 点単位で 100 = 1 万点)。
     uint32_t next_extend;
     uint8_t checkpoint;
     uint8_t paused;
     uint8_t title_selection;
+    uint8_t title_fade;
+    uint8_t title_exit;
+    uint8_t blink_phase;
+    uint8_t blink_timer;
+    uint8_t blink_again;
+    uint8_t rng;
 
     Player player;
     EnemyWorld enemies;

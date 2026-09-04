@@ -376,7 +376,7 @@ static void test_arrow_hardens_enemy(void)
 
     // 敵の高さ帯へ矢を通す。
     const int hit = enemy_hit_by_arrow(&w, 300, ENEMY_GROUND - 8);
-    CHECK_EQ(hit, 1);
+    CHECK_EQ(hit, 2);
     // 倒れずに硬化している。
     CHECK_EQ(w.e[0].flag, ENEMY_HARDENED);
     // 硬化時間は 1 段階目の 45 tick。
@@ -841,6 +841,14 @@ static void test_title_waits_for_start(void)
     game_update(&g, 0);
     CHECK_EQ(g.state, GS_TITLE);
     game_update(&g, BTN_START);
+    CHECK_EQ(g.state, GS_TITLE);
+    CHECK_EQ(g.title_exit, 0);
+    for (int i = 0; i < 56; ++i) game_update(&g, 0);
+    game_update(&g, BTN_START);
+    CHECK_EQ(g.title_exit, 1);
+    for (int i = 0; i < 108; ++i) game_update(&g, 0);
+    CHECK_EQ(g.state, GS_TITLE);
+    game_update(&g, 0);
     CHECK_EQ(g.state, GS_ROUND);
 }
 
@@ -851,6 +859,7 @@ static void test_title_menu_selection(void)
     Game g;
     game_init(&g);
     g.stage = 2;
+    for (int i = 0; i < 56; ++i) game_update(&g, 0);
 
     game_update(&g, BTN_DOWN);
     CHECK_EQ(g.title_selection, 1);
@@ -866,6 +875,7 @@ static void test_title_menu_selection(void)
     CHECK_EQ(g.title_selection, 1);
     game_update(&g, 0);
     game_update(&g, BTN_A);
+    for (int i = 0; i < 109; ++i) game_update(&g, 0);
     CHECK_EQ(g.state, GS_ROUND);
     CHECK_EQ(g.stage, 2);
     CHECK_EQ(g.lives, 3);
@@ -1313,6 +1323,130 @@ static void test_coins_reset_per_stage(void)
     CHECK_EQ(g.coin_taken[0], 0);
 }
 
+static void test_ported_scene_timing(void)
+{
+    printf("演出: 目パチ・旗の高さ点・CONTINUEを保証する\n");
+    Game g;
+    game_init(&g);
+    g.title_fade = 0;
+    g.blink_timer = 1;
+    game_update(&g, 0);
+    CHECK_EQ(g.blink_phase, 1);
+    for (int i = 0; i < 3; ++i) game_update(&g, 0);
+    CHECK_EQ(g.blink_phase, 2);
+    for (int i = 0; i < 7; ++i) game_update(&g, 0);
+    CHECK_EQ(g.blink_phase, 3);
+    for (int i = 0; i < 3; ++i) game_update(&g, 0);
+    CHECK_EQ(g.blink_phase, 0);
+    g.state = GS_CLEAR;
+    g.state_timer = STATE_TIME_CLEAR;
+    g.player.y_fixed = 148 * 256;
+    for (int i = 0; i < 10; ++i) game_update(&g, 0);
+    CHECK_EQ(player_y(&g.player), 168);
+    CHECK_EQ(g.score, 1);
+    CHECK_EQ(g.score_tens, 0);
+    g.state = GS_GAMEOVER;
+    g.state_timer = 1;
+    g.stage = 2;
+    game_update(&g, 0);
+    CHECK_EQ(g.state, GS_TITLE);
+    CHECK_EQ(g.stage, 2);
+    for (int i = 0; i < 56; ++i) game_update(&g, 0);
+    game_update(&g, BTN_DOWN);
+    game_update(&g, BTN_START);
+    for (int i = 0; i < 109; ++i) game_update(&g, 0);
+    CHECK_EQ(g.state, GS_ROUND);
+    CHECK_EQ(g.stage, 2);
+    CHECK_EQ(g.lives, 3);
+}
+
+static void test_harden_score_and_effects(void)
+{
+    printf("演出: 追撃では加点せず5発目で破壊・火花・1UPドロップ\n");
+    Game g;
+    game_start_at(&g, 0);
+    g.state = GS_PLAYING;
+    g.player.world_x = 120;
+    g.enemies.e[0].x = 200;
+    g.enemies.e[0].y = 184;
+    for (int hit = 0; hit < 5; ++hit)
+    {
+        g.enemies.hitstop = 0;
+        g.enemies.frame_count = 7;
+        g.arrows.a[0].x = 192;
+        g.arrows.a[0].y = 184;
+        g.arrows.a[0].dir = ARROW_RIGHT;
+        game_update(&g, 0);
+        CHECK_EQ(g.score, hit < 4 ? 1 : 3);
+    }
+    CHECK_EQ(g.enemies.e[0].flag, ENEMY_DYING);
+    CHECK(g.enemies.fx_timer > 0);
+    CHECK_EQ(g.enemies.kill_flash, 2);
+    CHECK_EQ(g.enemies.hitstop, 3);
+    for (int i = 0; i < 40; ++i) game_update(&g, 0);
+    CHECK_EQ(g.items.i[0].kind, ITEM_1UP);
+    CHECK_EQ(g.score, 3);
+    CHECK_EQ(g.enemies.fx_timer, 0);
+}
+
+static void test_jingles_and_music_transitions(void)
+{
+    printf("音: 開始和音・下降ミス音・1UP6音・ゲームオーバーの停止\n");
+    Sound s;
+    SoundFrame f;
+    sound_init(&s);
+    s.playing = 0;
+    sound_play_sfx(&s, SFX_START);
+    sound_update(&s, &f);
+    CHECK(f.key_on[VOICE_BASS] && f.key_on[VOICE_HARMONY] && f.key_on[VOICE_SFX]);
+    CHECK(!f.key_off[VOICE_BASS]);
+    CHECK_EQ(s.sfx_timer, 47);
+    const int first_chord = f.key_code[VOICE_SFX];
+    for (int i = 0; i < 14; ++i) sound_update(&s, &f);
+    CHECK(f.key_on[VOICE_SFX]);
+    CHECK(f.key_code[VOICE_SFX] > first_chord);
+    for (int i = 0; i < 33; ++i) sound_update(&s, &f);
+    CHECK(f.key_off[VOICE_BASS] && f.key_off[VOICE_HARMONY] && f.key_off[VOICE_SFX]);
+    sound_play_sfx(&s, SFX_1UP);
+    int notes = 0;
+    for (int i = 0; i < 24; ++i)
+    {
+        sound_update(&s, &f);
+        notes += f.key_on[VOICE_SFX];
+    }
+    CHECK_EQ(notes, 6);
+    sound_play_sfx(&s, SFX_DEATH);
+    sound_play_sfx(&s, SFX_ITEM);
+    CHECK_EQ(s.sfx, SFX_DEATH);
+    sound_update(&s, &f);
+    const int death_first = f.key_code[VOICE_SFX];
+    for (int i = 0; i < 26; ++i) sound_update(&s, &f);
+    CHECK(f.key_on[VOICE_SFX]);
+    CHECK(f.key_code[VOICE_SFX] < death_first);
+    sound_init(&s);
+    s.song = 3;
+    sound_update(&s, &f);
+    CHECK(f.key_on[VOICE_BASS] && f.mute_drums);
+    for (int i = 0; i < 300; ++i) sound_update(&s, &f);
+    CHECK(f.key_off[VOICE_BASS] && !f.key_on[VOICE_BASS]);
+    CHECK_EQ(s.tick, 255);
+    sound_init(&s);
+    s.song = 1;
+    s.tempo = 1;
+    s.fade = 15;
+    sound_update(&s, &f);
+    CHECK(f.key_on[VOICE_LEAD]);
+    CHECK_EQ(f.key_code[VOICE_LEAD], 0x65);
+    for (int i = 0; i < 3; ++i) sound_update(&s, &f);
+    CHECK(f.key_off[VOICE_LEAD]);
+    for (int i = 0; i < 124; ++i) sound_update(&s, &f);
+    CHECK_EQ(s.step, 0);
+    CHECK_EQ(s.bar, 0);
+    s.song = 0;
+    sound_update(&s, &f);
+    CHECK(f.key_off[VOICE_LEAD] && f.key_off[VOICE_HARMONY]);
+}
+
 int main(void)
 {
     test_level_features();
@@ -1375,6 +1509,9 @@ int main(void)
     test_coin_pickup();
     test_coin_needs_right_height();
     test_coins_reset_per_stage();
+    test_ported_scene_timing();
+    test_harden_score_and_effects();
+    test_jingles_and_music_transitions();
 
     printf("\n%d 件中 %d 件成功\n", g_checks, g_checks - g_failures);
     if (g_failures)

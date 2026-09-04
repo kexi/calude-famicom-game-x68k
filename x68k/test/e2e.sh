@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # エミュレータ上で実際に動かし、HUD に出した内部状態を確かめる。
 #
 # 3 層の検証のうち、これが一番外側:
@@ -6,11 +6,8 @@
 #   just solve  全ステージが通せるか (探索)
 #   just e2e    68000 のコードとして動き、入力に反応するか  <- ここ
 #
-# 現行の x68k-run は PPM にテキスト/G-VRAMを合成するがスプライト/BG面は
-# 合成しない。ゲーム自体はスプライトレジスタへ描画しているため、PPMだけを
-# 見て「プレイヤーがいない」と判定するとランナーの制約をゲームの失敗と
-# 誤認する。そこで自前字形のデバッグHUDから座標・接地・生存を読み、
-# ゲームループと入力が実際に進んだ結果を検証する。
+# just render-runner が既存の描画器でBG・スプライトを合成する。
+# 検証ビルド専用のHUDからも座標・接地・生存を読み、入力結果を照合する。
 set -euo pipefail
 
 emu="${X68K_STACKCHAN:-$(dirname "$0")/../../../x68k-stackchan}"
@@ -19,7 +16,7 @@ here="$(cd "$(dirname "$0")/../.." && pwd)"
 
 shot() {
     local out="$1" cycles="$2" keys="$3"
-    "$emu/build-host/x68k-run" \
+    "$build/x68k-render-run" \
         --iplrom "$emu/rom/iplrom.dat" \
         --hdd "$build/disk.hdf" \
         --cycles "$cycles" --event-driven \
@@ -43,13 +40,16 @@ done
 start_keys+=$'\n'
 
 echo "e2e: START後に原作のラウンド画面を表示する"
-shot /tmp/e2e-round.ppm 410000000 "$start_keys"
+shot /tmp/e2e-round.ppm 430000000 "$start_keys"
 if ! python3 "$here/x68k/tools/checkppm.py" /tmp/e2e-round.ppm --expect round; then
     fail=1
 fi
 
 echo "e2e: 起動して 1-1 の初期状態になる"
-shot /tmp/e2e-boot.ppm 450000000 "$start_keys"
+shot /tmp/e2e-boot.ppm 480000000 "$start_keys"
+if ! python3 "$here/x68k/tools/checkppm.py" /tmp/e2e-boot.ppm --expect player,ground,hud; then
+    fail=1
+fi
 state=$(python3 "$here/x68k/tools/readhud.py" /tmp/e2e-boot.ppm | head -1)
 if [[ "$state" == "0120 0168 1 1 1 3 0"* ]]; then
     echo "  ok   x=120 y=168 接地 生存 ステージ1 残機3"
@@ -60,17 +60,17 @@ fi
 
 echo "e2e: ジャンプすると位置が変わる"
 # --keys は320Mサイクルから1キーを押下/離鍵それぞれ2Mサイクルで送る。
-# START後にも無操作の q を12回挟むと、452M付近で k を押せる。
-# 短いタップなので、着地前の454Mサイクルで状態を読む。
+# START後にも無操作の q を25回挟むと、504M付近で k を押せる。
+# 短いタップなので、着地前の506Mサイクルで状態を読む。
 #
 # Why not --input-script: ゲーム作成時に使ったランナーには存在したが、
 # 現行 x68k-run の公開CLIには無い。公開CLIだけで再現できる方が壊れにくい。
 jump_keys="$start_keys"
-for ((i = 0; i < 12; ++i)); do
+for ((i = 0; i < 25; ++i)); do
     jump_keys+=q
 done
 jump_keys+=k
-shot /tmp/e2e-jump.ppm 454000000 "$jump_keys"
+shot /tmp/e2e-jump.ppm 506000000 "$jump_keys"
 state=$(python3 "$here/x68k/tools/readhud.py" /tmp/e2e-jump.ppm | head -1)
 y=$(echo "$state" | awk '{print $2}')
 on_ground=$(echo "$state" | awk '{print $3}')
@@ -86,13 +86,13 @@ fi
 echo "e2e: d キーで右へ動く"
 # q でラウンド表示中を待ち、d の押下/離鍵を繰り返す。
 run_keys="$start_keys"
-for ((i = 0; i < 2; ++i)); do
+for ((i = 0; i < 20; ++i)); do
     run_keys+=q
 done
 for ((i = 0; i < 20; ++i)); do
     run_keys+=d
 done
-shot /tmp/e2e-run.ppm 500000000 "$run_keys"
+shot /tmp/e2e-run.ppm 540000000 "$run_keys"
 state=$(python3 "$here/x68k/tools/readhud.py" /tmp/e2e-run.ppm | head -1)
 px=$(echo "$state" | awk '{print $1}')
 alive=$(echo "$state" | awk '{print $4}')

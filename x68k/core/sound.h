@@ -38,6 +38,9 @@
 #define SFX_COIN 4
 #define SFX_DEFEAT 5
 #define SFX_DEATH 6
+#define SFX_START 7
+#define SFX_1UP 8
+#define SFX_ITEM 9
 
 // 1 フレームぶんの「鳴らす指示」。platform 側はこれだけ見ればよい。
 typedef struct
@@ -53,6 +56,7 @@ typedef struct
 
     // 打楽器。DRUM_NONE 以外なら鳴らす。
     uint8_t drum;
+    uint8_t mute_drums;
 } SoundFrame;
 
 typedef struct
@@ -69,8 +73,9 @@ typedef struct
 
     // 曲を鳴らすか。演出中は止める。
     uint8_t playing;
-    // どの曲か。0 = ゲーム、1 = タイトル/ファンファーレ。
+    // 0=ゲーム、1=タイトル/エンディング、2=クリア、3=ゲームオーバー。
     uint8_t song;
+    uint8_t fade;
 
     // 前に鳴らした音。同じ音が続くときにリトリガしないため (タイ)。
     uint8_t last_note[NUM_VOICES];

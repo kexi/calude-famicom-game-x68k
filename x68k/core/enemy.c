@@ -45,6 +45,11 @@ void enemy_init(EnemyWorld *w, int stage)
 
     w->frame_count = 0;
     w->hitstop = 0;
+    w->fx_timer = 0;
+    w->fx_x = 0;
+    w->fx_y = 0;
+    w->kill_flash = 0;
+    w->drop_override = 0;
 
     for (int i = 0; i < ENEMY_COUNT; ++i)
     {
@@ -177,6 +182,8 @@ void enemy_update(EnemyWorld *w, const Player *p, int32_t scroll)
     // メインループの先頭で無条件に増やすと、止まっている間もアニメが
     // 進んでしまう。
     ++w->frame_count;
+    const int effect_active = w->fx_timer > 0;
+    if (effect_active) --w->fx_timer;
 
     for (int i = 0; i < ENEMY_COUNT; ++i)
     {
@@ -352,9 +359,10 @@ int enemy_hit_by_arrow(EnemyWorld *w, int32_t arrow_x, int arrow_y)
             ++e->dir;
             if (e->dir >= 4)
             {
-                e->flag = ENEMY_DYING;
-                e->timer = 28;
-                return 1;
+                w->drop_override =
+                    (w->frame_count & 7u) == 7u ? 3 : (uint8_t)(1 + (w->frame_count & 1u));
+                enemy_kill(w, e);
+                return 3;
             }
             e->timer = kHardenTime[e->dir];
             return 1;
@@ -365,9 +373,20 @@ int enemy_hit_by_arrow(EnemyWorld *w, int32_t arrow_x, int arrow_y)
         e->dir = 0;
         e->timer = kHardenTime[0];
         w->hitstop = 2;
-        return 1;
+        return 2;
     }
     return 0;
+}
+
+void enemy_kill(EnemyWorld *w, Enemy *e)
+{
+    e->flag = ENEMY_DYING;
+    e->timer = 28;
+    w->hitstop = 3;
+    w->kill_flash = 2;
+    w->fx_timer = 12;
+    w->fx_x = e->x + 4;
+    w->fx_y = e->y + 4;
 }
 
 int enemy_touch_player(EnemyWorld *w, Player *p, uint8_t buttons)

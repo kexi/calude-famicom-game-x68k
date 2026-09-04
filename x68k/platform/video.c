@@ -36,7 +36,11 @@
 #define PAT_ITEM_POWER 97
 #define PAT_ITEM_1UP 98
 #define PAT_BOSS 99
-#define NES_ACTOR_PATTERN_COUNT 39
+#define NES_ACTOR_PATTERN_COUNT 45
+#define PAT_FX_SMALL 103
+#define PAT_FX_LARGE 104
+#define PAT_BAT_PURPLE 105
+#define PAT_BAT_PURPLE_WING 106
 #define NES_BACKGROUND_PATTERN_COUNT 18
 #define NES_TITLE_BITMAP_ROWS 240
 #define PAT_TITLE_CURSOR 63
@@ -49,6 +53,14 @@ extern const uint8_t g_nes_round_bitmaps[4][NES_TITLE_BITMAP_ROWS][128];
 extern const uint8_t g_nes_title_cursor_pattern[1][128];
 extern const uint16_t g_nes_game_palettes[4][16];
 extern const uint16_t g_nes_title_palette[16];
+extern const uint8_t g_nes_ending_bitmap[240][128];
+extern const uint8_t g_nes_eyes[4][24][16];
+extern const uint16_t g_nes_title_fades[8][16];
+extern const uint8_t g_nes_digits[10][8];
+extern const uint16_t g_nes_logo_fades[8][8];
+static int shown_eye = -1;
+static int shown_fade = -1;
+static int shown_selection = -1;
 
 static void put_sprite(int index, int x, int y, int pattern, int hflip);
 
@@ -148,9 +160,6 @@ void video_build_stage(void)
         }
 
         // コインを置く。原作は行 22 (y 176-183) なので、セル行 11。
-        //
-        // Why 専用のパターンを作らないか: アイテムと同じ絵で足りる。
-        // パターンを増やすと PCG の割り当てが動き、他の絵がずれる元になる。
         if (level_has_coin(col))
         {
             set_bg_cell(col, 176 / BG_CELL_SIZE, PAT_COIN);
@@ -199,6 +208,9 @@ void video_clear_scene(void)
 
 static void show_graphic_bitmap(const uint8_t bitmap[NES_TITLE_BITMAP_ROWS][128])
 {
+    shown_eye = -1;
+    shown_fade = -1;
+    shown_selection = -1;
     // G-VRAMは16色512x512。原作画面を左上の256x240へ原寸で置く。
     poke16(VC_MODE, 0x0000u);
     for (int color = 0; color < 16; ++color)
@@ -242,6 +254,72 @@ void video_show_round(int stage)
 {
     const int safe_stage = (stage >= 0 && stage < 4) ? stage : 0;
     show_graphic_bitmap(g_nes_round_bitmaps[safe_stage]);
+}
+
+void video_show_ending(void)
+{
+    show_graphic_bitmap(g_nes_ending_bitmap);
+    poke16(VC_GRAPHIC_PALETTE + 8u, 0xFFFFu);
+}
+
+void video_animate_scene(int is_title, int frame, int phase, int fade, int exiting, int selection,
+                         int lives)
+{
+    const int safe_fade = fade < 8 ? fade : 7;
+    const int palette_changed = safe_fade != shown_fade;
+    if (palette_changed)
+    {
+        for (int color = 0; color < 16; ++color)
+            poke16(VC_GRAPHIC_PALETTE + (uint32_t)color * 2u, g_nes_title_fades[safe_fade][color]);
+        const int is_bright = safe_fade == 0;
+        if (is_bright) poke16(VC_GRAPHIC_PALETTE + 8u, 0xFFFFu);
+        shown_fade = safe_fade;
+    }
+    const int eye = fade ? 4 : (exiting ? 3 : (phase == 3 ? 1 : phase));
+    const int eye_changed = eye != shown_eye;
+    if (eye_changed)
+    {
+        const int dy = is_title ? 0 : 96;
+        for (int y = 0; y < 24; ++y)
+            for (int x = 0; x < 32; ++x)
+            {
+                const uint8_t packed = eye == 4 ? g_nes_title_bitmap[y + 56][(x + 184) / 2]
+                                                : g_nes_eyes[eye][y][x / 2];
+                const uint16_t color = (x & 1) ? packed & 15u : packed >> 4;
+                poke16(GVRAM + (uint32_t)(y + 56 + dy) * GVRAM_BYTES_PER_LINE +
+                           (uint32_t)(x + 184) * 2u,
+                       color);
+            }
+        shown_eye = eye;
+    }
+    const int cursor = fade || exiting ? -1 : selection;
+    const int cursor_changed = is_title && cursor != shown_selection;
+    if (cursor_changed)
+    {
+        static const int ys[3] = {123, 137, 151};
+        for (int option = 0; option < 3; ++option)
+            for (int y = 0; y < 8; ++y)
+                for (int x = 0; x < 8; ++x)
+                {
+                    const int sx = 44 + x, sy = ys[option] + y;
+                    const uint8_t packed = g_nes_title_bitmap[sy][sx / 2];
+                    uint16_t color = (sx & 1) ? packed & 15u : packed >> 4;
+                    const uint8_t glyph = g_nes_title_cursor_pattern[0][y * 4 + x / 2];
+                    const int opaque = ((x & 1) ? glyph & 15 : glyph >> 4) != 0;
+                    if (option == cursor && opaque) color = 4;
+                    poke16(GVRAM + (uint32_t)sy * GVRAM_BYTES_PER_LINE + (uint32_t)sx * 2u, color);
+                }
+        shown_selection = cursor;
+    }
+    if (!is_title)
+    {
+        const int digit = lives < 0 ? 0 : (lives > 9 ? 9 : lives);
+        for (int y = 0; y < 8; ++y)
+            for (int x = 0; x < 8; ++x)
+                poke16(GVRAM + (uint32_t)(90 + y) * GVRAM_BYTES_PER_LINE + (uint32_t)(132 + x) * 2u,
+                       (g_nes_digits[digit][y] & (128u >> x)) ? 1 : 0);
+    }
+    if (is_title) poke16(VC_GRAPHIC_PALETTE + 18u, g_nes_logo_fades[safe_fade][(frame >> 3) & 7]);
 }
 
 void video_put_title_cursor(int selection)
@@ -300,6 +378,8 @@ void video_put_enemy(int slot, int x, int y, int type, int hardened, int hurt, i
     if (is_bat)
     {
         pattern = hardened ? PAT_BAT_STONE : (wing_up ? PAT_BAT_WING : PAT_BAT);
+        const int purple = type == ENEMY_BAT && !hardened;
+        if (purple) pattern = wing_up ? PAT_BAT_PURPLE_WING : PAT_BAT_PURPLE;
     }
     else
     {
@@ -310,6 +390,18 @@ void video_put_enemy(int slot, int x, int y, int type, int hardened, int hurt, i
     poke16(base + 2, (uint16_t)(y + SPR_COORD_OFFSET));
     poke16(base + 4, (uint16_t)pattern);
     poke16(base + 6, 3);
+}
+
+void video_put_effect(int x, int y, int timer, int flash)
+{
+    const int visible = timer > 0 && x >= 0 && x < 256;
+    if (visible)
+        put_sprite(13, x, y, timer >= 7 ? PAT_FX_SMALL : PAT_FX_LARGE, 0);
+    else
+        put_sprite(13, -32, -32, PAT_FX_SMALL, 0);
+    poke16(VC_TEXT_PALETTE, flash ? 0xFFFFu : 0);
+    put_sprite(14, 8, 16, 107, 0);
+    put_sprite(15, 216, 16, 108, 0);
 }
 
 void video_put_arrow(int slot, int x, int y, int dir)

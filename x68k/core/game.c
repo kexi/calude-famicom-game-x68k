@@ -36,6 +36,7 @@ static void add_score(Game *g, uint32_t points)
         {
             ++g->lives;
         }
+        sound_play_sfx(&g->sound, SFX_1UP);
     }
 }
 
@@ -60,6 +61,10 @@ static void start_stage(Game *g)
     }
     sound_set_stage(&g->sound, g->stage);
     g->sound.song = 0;
+    g->sound.step = 0;
+    g->sound.tick = 0;
+    g->sound.bar = 0;
+    g->sound.fade = 15;
     g->sound.playing = 1;
     g->paused = 0;
 
@@ -70,6 +75,8 @@ static void start_stage(Game *g)
 
     g->state = GS_ROUND;
     g->state_timer = STATE_TIME_ROUND;
+    g->blink_timer = 90;
+    g->blink_phase = 0;
 }
 
 void game_start_at(Game *g, int stage)
@@ -89,10 +96,15 @@ void game_init(Game *g)
     g->stage = 0;
     g->lives = 3;
     g->score = 0;
+    g->score_tens = 0;
     g->next_extend = EXTEND_STEP;
     g->checkpoint = 0;
     g->paused = 0;
     g->title_selection = 0;
+    g->title_fade = 7;
+    g->title_exit = 0;
+    g->blink_again = 0;
+    g->rng = 0xA5;
     g->coins = 0;
     g->prev_buttons = 0;
     g->frame = 0;
@@ -103,6 +115,7 @@ void game_init(Game *g)
     g->state = GS_TITLE;
     g->state_timer = 0;
     g->sound.song = 1;
+    g->sound.fade = 0;
 }
 
 int32_t game_scroll(const Game *g) { return camera_scroll_for(g->player.world_x); }
@@ -146,6 +159,8 @@ static void update_state_timer(Game *g)
                 g->sound.song = 1;
                 g->sound.step = 0;
                 g->sound.tick = 0;
+                g->sound.bar = 0;
+                g->sound.tempo = 8;
                 break;
             }
             start_stage(g);
@@ -158,6 +173,10 @@ static void update_state_timer(Game *g)
                 g->state = GS_GAMEOVER;
                 g->state_timer = STATE_TIME_OVER;
                 g->checkpoint = 0;
+                g->sound.song = 3;
+                g->sound.step = 0;
+                g->sound.tick = 0;
+                g->sound.playing = 1;
                 break;
             }
             // やられるとパワー矢と無敵を失う。
@@ -165,9 +184,12 @@ static void update_state_timer(Game *g)
             break;
 
         case GS_GAMEOVER:
-            // 最初からやり直す。
+        {
+            const int continue_stage = g->stage;
             game_init(g);
+            g->stage = continue_stage;
             break;
+        }
 
         default:
             break;
@@ -194,6 +216,11 @@ static void check_clear(Game *g)
 
     g->state = GS_CLEAR;
     g->state_timer = STATE_TIME_CLEAR;
+    g->sound.song = 2;
+    g->sound.step = 0;
+    g->sound.tick = 0;
+    g->sound.bar = 0;
+    g->sound.tempo = 6;
     add_score(g, SCORE_CLEAR);
 }
 
@@ -218,6 +245,61 @@ void game_update_with_sound(Game *g, uint8_t buttons, SoundFrame *sound)
 
     if (g->state == GS_TITLE)
     {
+        g->rng = (uint8_t)((g->rng << 1) ^ ((g->rng & 0x80u) ? 0x1Du : 0));
+        const int is_exiting = g->title_exit != 0;
+        if (is_exiting)
+        {
+            ++g->title_exit;
+            const int is_fading_out = g->title_exit >= 30;
+            if (is_fading_out) g->title_fade = (uint8_t)(1 + ((g->title_exit - 30) >> 3));
+            const int exit_finished = g->title_exit >= 110;
+            if (exit_finished)
+            {
+                g->stage = g->title_selection == 0 ? 0 : g->stage;
+                g->lives = 3;
+                g->score = 0;
+                g->score_tens = 0;
+                g->next_extend = EXTEND_STEP;
+                g->checkpoint = 0;
+                g->coins = 0;
+                start_stage(g);
+            }
+            g->prev_buttons = buttons;
+            return;
+        }
+        const int fade_tick = g->title_fade != 0 && (g->frame & 7u) == 0;
+        if (fade_tick) --g->title_fade;
+        const int fading_in = g->title_fade != 0;
+        if (fading_in)
+        {
+            g->prev_buttons = buttons;
+            return;
+        }
+        const int blink_elapsed = --g->blink_timer == 0;
+        if (blink_elapsed)
+        {
+            switch (g->blink_phase)
+            {
+                case 0:
+                    g->blink_phase = 1;
+                    g->blink_timer = 3;
+                    g->blink_again = (g->rng & 7u) < 2;
+                    break;
+                case 1:
+                    g->blink_phase = 2;
+                    g->blink_timer = 7;
+                    break;
+                case 2:
+                    g->blink_phase = 3;
+                    g->blink_timer = 3;
+                    break;
+                default:
+                    g->blink_phase = 0;
+                    g->blink_timer = g->blink_again ? 14 : (uint8_t)(80 + (g->rng & 127u));
+                    g->blink_again = 0;
+                    break;
+            }
+        }
         const int down_pressed = (buttons & BTN_DOWN) != 0 && (g->prev_buttons & BTN_DOWN) == 0;
         const int up_pressed = (buttons & BTN_UP) != 0 && (g->prev_buttons & BTN_UP) == 0;
         if (down_pressed && g->title_selection < 2)
@@ -231,14 +313,9 @@ void game_update_with_sound(Game *g, uint8_t buttons, SoundFrame *sound)
         const int is_option = g->title_selection == 2;
         if (confirm_pressed && !is_option)
         {
-            const int selected_stage = g->title_selection == 0 ? 0 : g->stage;
-            g->stage = selected_stage;
-            g->lives = 3;
-            g->score = 0;
-            g->next_extend = EXTEND_STEP;
-            g->checkpoint = 0;
-            g->coins = 0;
-            start_stage(g);
+            g->title_exit = 1;
+            g->sound.playing = 0;
+            sound_play_sfx(&g->sound, SFX_START);
         }
         g->prev_buttons = buttons;
         return;
@@ -259,6 +336,23 @@ void game_update_with_sound(Game *g, uint8_t buttons, SoundFrame *sound)
     // 演出中は世界を動かさない。
     if (g->state != GS_PLAYING)
     {
+        const int sliding = g->state == GS_CLEAR && player_y(&g->player) < PLAYER_GROUND_Y;
+        if (sliding)
+        {
+            g->player.y_fixed += 2 * 256;
+            const int carry = ++g->score_tens == 10;
+            if (carry)
+            {
+                g->score_tens = 0;
+                add_score(g, 1);
+            }
+        }
+        const int round_blink = g->state == GS_ROUND && --g->blink_timer == 0;
+        if (round_blink)
+        {
+            g->blink_phase = g->blink_phase == 0 ? 2 : 0;
+            g->blink_timer = g->blink_phase ? 12 : (uint8_t)(60 + (g->frame & 63u));
+        }
         update_state_timer(g);
         g->prev_buttons = buttons;
         return;
@@ -268,6 +362,7 @@ void game_update_with_sound(Game *g, uint8_t buttons, SoundFrame *sound)
     {
         g->paused ^= 1u;
         g->sound.playing = (uint8_t)!g->paused;
+        sound_play_sfx(&g->sound, SFX_COIN);
         g->prev_buttons = buttons;
         return;
     }
@@ -277,6 +372,8 @@ void game_update_with_sound(Game *g, uint8_t buttons, SoundFrame *sound)
         g->prev_buttons = buttons;
         return;
     }
+    const int flash_active = g->enemies.kill_flash > 0;
+    if (flash_active) --g->enemies.kill_flash;
 
     // hitstop 中も止まる。撃破の手応えを出すための演出。
     if (g->enemies.hitstop > 0)
@@ -320,19 +417,24 @@ void game_update_with_sound(Game *g, uint8_t buttons, SoundFrame *sound)
         {
             continue;
         }
-        if (enemy_hit_by_arrow(&g->enemies, a->x, a->y))
+        const int enemy_hit = enemy_hit_by_arrow(&g->enemies, a->x, a->y);
+        if (enemy_hit)
         {
             a->dir = ARROW_NONE;
-            add_score(g, SCORE_HARDEN);
+            if (enemy_hit == 2) add_score(g, SCORE_HARDEN);
+            if (enemy_hit == 3) add_score(g, SCORE_DESTROY);
             sound_play_sfx(&g->sound, SFX_HIT);
+            if (enemy_hit == 3) sound_play_sfx(&g->sound, SFX_DEFEAT);
             continue;
         }
         if (boss_hit_by_arrow(&g->boss, a->x, a->y))
         {
             a->dir = ARROW_NONE;
+            sound_play_sfx(&g->sound, SFX_HIT);
             if (g->boss.state == BOSS_DYING)
             {
                 add_score(g, SCORE_BOSS);
+                sound_play_sfx(&g->sound, SFX_DEFEAT);
             }
         }
     }
@@ -348,6 +450,14 @@ void game_update_with_sound(Game *g, uint8_t buttons, SoundFrame *sound)
 
     enemy_update(&g->enemies, &g->player, scroll);
     boss_update(&g->boss, &g->player);
+    const int boss_burst = g->boss.state == BOSS_DYING && (g->boss.timer & 15) == 0;
+    if (boss_burst)
+    {
+        g->enemies.fx_timer = 12;
+        g->enemies.fx_x = g->boss.x + g->boss.timer;
+        g->enemies.fx_y = g->boss.y + ((g->boss.y + g->boss.timer) & 31) - 8;
+        sound_play_sfx(&g->sound, SFX_HIT);
+    }
 
     for (int i = 0; i < ENEMY_COUNT; ++i)
     {
@@ -355,8 +465,19 @@ void game_update_with_sound(Game *g, uint8_t buttons, SoundFrame *sound)
         if (just_gone)
         {
             item_spawn(&g->items, i, g->enemies.e[i].x);
-            add_score(g, SCORE_DESTROY);
-            sound_play_sfx(&g->sound, SFX_DEFEAT);
+            const int has_override = g->enemies.drop_override != 0;
+            if (has_override)
+                for (int slot = 0; slot < ITEM_SLOTS; ++slot)
+                {
+                    Item *item = &g->items.i[slot];
+                    const int is_drop = item->kind != ITEM_NONE && item->x == g->enemies.e[i].x + 4;
+                    if (is_drop)
+                    {
+                        item->kind = g->enemies.drop_override;
+                        g->enemies.drop_override = 0;
+                        break;
+                    }
+                }
         }
     }
 
@@ -386,6 +507,7 @@ void game_update_with_sound(Game *g, uint8_t buttons, SoundFrame *sound)
             if (n == 0 && g->lives < 9)
             {
                 ++g->lives;
+                sound_play_sfx(&g->sound, SFX_1UP);
             }
         }
     }
@@ -395,7 +517,10 @@ void game_update_with_sound(Game *g, uint8_t buttons, SoundFrame *sound)
     if (got != ITEM_NONE)
     {
         add_score(g, SCORE_ITEM);
-        sound_play_sfx(&g->sound, SFX_COIN);
+        sound_play_sfx(&g->sound, SFX_ITEM);
+        g->enemies.fx_timer = 12;
+        g->enemies.fx_x = g->player.world_x + 8;
+        g->enemies.fx_y = player_y(&g->player) + 24;
         if (got == ITEM_STAR)
         {
             g->star_timer = 255;
@@ -407,6 +532,7 @@ void game_update_with_sound(Game *g, uint8_t buttons, SoundFrame *sound)
         else if (got == ITEM_1UP && g->lives < 9)
         {
             ++g->lives;
+            sound_play_sfx(&g->sound, SFX_1UP);
         }
     }
 
@@ -425,24 +551,38 @@ void game_update_with_sound(Game *g, uint8_t buttons, SoundFrame *sound)
             const int touching = depth > 0 && depth < 40 && dx >= 0 && dx < 27;
             if (touching)
             {
-                e->flag = ENEMY_DYING;
-                e->timer = 28;
+                enemy_kill(&g->enemies, e);
+                sound_play_sfx(&g->sound, SFX_DEFEAT);
             }
         }
     }
     else
     {
-        enemy_touch_player(&g->enemies, &g->player, buttons);
+        const int stomped = enemy_touch_player(&g->enemies, &g->player, buttons) == 1;
+        if (stomped) sound_play_sfx(&g->sound, SFX_JUMP);
+        const int boss_was_alive = g->boss.state == BOSS_ALIVE;
+        const int boss_hp = boss_was_alive ? g->boss.hp : 0;
         boss_touch_player(&g->boss, &g->player, buttons);
+        if (boss_was_alive && g->boss.hp != boss_hp)
+        {
+            sound_play_sfx(&g->sound, SFX_HIT);
+            if (g->boss.state == BOSS_DYING)
+            {
+                add_score(g, SCORE_BOSS);
+                sound_play_sfx(&g->sound, SFX_DEFEAT);
+            }
+        }
     }
 
     if (!g->player.alive)
     {
         sound_play_sfx(&g->sound, SFX_DEATH);
+        g->sound.playing = 0;
         g->state = GS_DYING;
         g->state_timer = STATE_TIME_DEAD;
         // やられるとパワー矢と無敵を失う。
         g->arrows.weapon_level = 0;
+        for (int i = 0; i < ARROW_SLOTS; ++i) g->arrows.a[i].dir = ARROW_NONE;
         g->star_timer = 0;
     }
     else

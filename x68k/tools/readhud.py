@@ -88,13 +88,13 @@ def decode_cell(px: bytes, w: int, col: int, row: int) -> str:
 
 
 def read_row(px: bytes, w: int, row: int, cols: int = 40) -> str:
-    return "".join(decode_cell(px, w, c, row) for c in range(cols)).rstrip()
+    return "".join(decode_cell(px, w, c, row) for c in range(min(cols, w // 8))).rstrip()
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("ppm", type=Path)
-    ap.add_argument("--row", type=int, default=1, help="読む行 (既定 1 = デバッグ行)")
+    ap.add_argument("--row", type=int, default=0, help="読む行 (既定 0 = デバッグ行)")
     args = ap.parse_args()
 
     w, h, px = read_ppm(args.ppm)
@@ -103,7 +103,7 @@ def main() -> int:
 
     # デバッグ行なら意味づけして出す。
     # 並び: XXXX YYYY G A S L T
-    if args.row == 1 and len(text) >= 19:
+    if args.row == 0 and len(text) >= 19:
         parts = text.split()
         if len(parts) >= 7:
             print(

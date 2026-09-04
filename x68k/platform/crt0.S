@@ -36,6 +36,7 @@
     .globl  _dos_exit2
     .globl  _dos_print
     .globl  _dos_super
+    .globl  _iocs_cursor_off
 
 _start:
     | bss をゼロで埋める。
@@ -82,6 +83,14 @@ _dos_super:
     move.l  4(%sp), -(%sp)
     .dc.w   0xFF20                  | DOS _SUPER
     addq.l  #4, %sp
+    rts
+
+| void _iocs_cursor_off(void); Human68kのカーソル点滅によるTVRAM上書きを止める。
+_iocs_cursor_off:
+    movem.l %d1-%d7/%a0-%a6, -(%sp)
+    moveq   #0x1f, %d0
+    trap    #15
+    movem.l (%sp)+, %d1-%d7/%a0-%a6
     rts
 
 | void _dos_exit2(int code);

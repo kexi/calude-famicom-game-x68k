@@ -47,7 +47,14 @@ typedef struct
     Enemy e[ENEMY_COUNT];
     uint32_t frame_count;
     int hitstop;
+    int fx_timer;
+    int32_t fx_x;
+    int fx_y;
+    int kill_flash;
+    uint8_t drop_override;
 } EnemyWorld;
+
+void enemy_kill(EnemyWorld *w, Enemy *e);
 
 void enemy_init(EnemyWorld *w, int stage);
 
@@ -64,7 +71,7 @@ int enemy_probe_solid(const EnemyWorld *w, const Player *p);
 // 硬化した敵の上に立てるか。立てるならその上端 Y、無ければ PROBE_NONE。
 uint8_t enemy_probe_platform(const EnemyWorld *w, const Player *p);
 
-// 矢が当たったときの処理。当たったら 1 を返す (矢は消える)。
+// 命中1、初回硬化2、5発目の破壊3を返す (すべて矢は消える)。
 int enemy_hit_by_arrow(EnemyWorld *w, int32_t arrow_x, int arrow_y);
 
 // プレイヤーとの接触。踏んだら 1、やられたら -1、何も無ければ 0。
