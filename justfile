@@ -46,12 +46,12 @@ cflags := "-m68000 -O2 -fomit-frame-pointer -ffreestanding -nostdlib -fno-builti
 # ld を直に呼べばスクリプトの記述だけが効く。
 [doc('hello.x をビルドする (ツールチェーンの貫通確認用)')]
 build-hello:
-    mkdir -p {{build}}
-    {{cross}}-gcc {{cflags}} -c x68k/platform/crt0.S -o {{build}}/crt0.o
-    {{cross}}-gcc {{cflags}} -c x68k/platform/hello.c -o {{build}}/hello.o
-    {{cross}}-ld --emit-relocs -n -T x68k/ld/game.ld \
-      -o {{build}}/hello.elf {{build}}/crt0.o {{build}}/hello.o
-    python3 x68k/tools/elf2x.py {{build}}/hello.elf {{build}}/HELLO.X
+    mkdir -p {{ build }}
+    {{ cross }}-gcc {{ cflags }} -c x68k/platform/crt0.S -o {{ build }}/crt0.o
+    {{ cross }}-gcc {{ cflags }} -c x68k/platform/hello.c -o {{ build }}/hello.o
+    {{ cross }}-ld --emit-relocs -n -T x68k/ld/game.ld \
+      -o {{ build }}/hello.elf {{ build }}/crt0.o {{ build }}/hello.o
+    python3 x68k/tools/elf2x.py {{ build }}/hello.elf {{ build }}/HELLO.X
 
 # ゲーム本体をビルドする。
 #
@@ -65,22 +65,22 @@ assets:
 
 [doc('ゲーム本体 (GAME.X) をビルドする')]
 build: assets
-    mkdir -p {{build}}
-    for f in {{game_srcs}}; do \
-      o={{build}}/$(basename $f | tr '.' '_').o; \
-      {{cross}}-gcc {{cflags}} -c $f -o $o || exit 1; \
+    mkdir -p {{ build }}
+    for f in {{ game_srcs }}; do \
+      o={{ build }}/$(basename $f | tr '.' '_').o; \
+      {{ cross }}-gcc {{ cflags }} -c $f -o $o || exit 1; \
     done
-    {{cross}}-ld --emit-relocs -n -T x68k/ld/game.ld \
-      -o {{build}}/game.elf {{build}}/*_S.o {{build}}/*_c.o \
-      $({{cross}}-gcc -m68000 -print-libgcc-file-name)
-    python3 x68k/tools/elf2x.py {{build}}/game.elf {{build}}/GAME.X
+    {{ cross }}-ld --emit-relocs -n -T x68k/ld/game.ld \
+      -o {{ build }}/game.elf {{ build }}/*_S.o {{ build }}/*_c.o \
+      $({{ cross }}-gcc -m68000 -print-libgcc-file-name)
+    python3 x68k/tools/elf2x.py {{ build }}/game.elf {{ build }}/GAME.X
 
 [doc('ゲームをエミュレータで走らせる')]
 run *ARGS: build
-    just image {{build}}/GAME.X
-    {{emu}}/build-host/x68k-run --iplrom {{emu}}/rom/iplrom.dat \
-      --hdd {{build}}/disk.hdf --cycles 900000000 --event-driven \
-      --keys $'game\n' {{ARGS}}
+    just image {{ build }}/GAME.X
+    {{ emu }}/build-host/x68k-run --iplrom {{ emu }}/rom/iplrom.dat \
+      --hdd {{ build }}/disk.hdf --cycles 900000000 --event-driven \
+      --keys $'game\n' {{ ARGS }}
 
 # ───── ディスクイメージと実行 ──────────────────────────────────────────────
 
@@ -90,17 +90,17 @@ run *ARGS: build
 # 既存の hdd0.hdf から HUMAN.SYS / COMMAND.X を抽出して組み直す。
 [doc('.X を入れた SASI HDD イメージを作る')]
 image X:
-    python3 {{emu}}/tools/make_sasi_image.py inject \
-      {{emu}}/rom/hdd0.hdf {{build}}/disk.hdf --add {{X}}
+    python3 x68k/tools/inject_hdf.py \
+      {{ emu }}/rom/hdd0.hdf {{ build }}/disk.hdf --add {{ X }}
 
 # --keys は「実際の改行」を含む文字列を渡す必要がある。
 # just の "..." では \n がエスケープとして解釈されないので、
 # シェルの $'...' を使って本物の改行を作る。
 [doc('hello.x をエミュレータで走らせて結果を出す')]
 run-hello: build-hello
-    just image {{build}}/HELLO.X
-    {{emu}}/build-host/x68k-run --iplrom {{emu}}/rom/iplrom.dat \
-      --hdd {{build}}/disk.hdf --cycles 900000000 --event-driven \
+    just image {{ build }}/HELLO.X
+    {{ emu }}/build-host/x68k-run --iplrom {{ emu }}/rom/iplrom.dat \
+      --hdd {{ build }}/disk.hdf --cycles 900000000 --event-driven \
       --keys $'hello\n' --dump-text
 
 # 窓を出して実際に遊ぶ。
@@ -111,10 +111,10 @@ run-hello: build-hello
 # エミュレータ側の just build-play が「作らない」と言って終わる。
 [doc('窓を出してゲームを遊ぶ')]
 play: build
-    just image {{build}}/GAME.X
-    cd {{emu}} && just build-play
-    {{emu}}/build-host/x68k-play --iplrom {{emu}}/rom/iplrom.dat \
-      --hdd {{justfile_directory()}}/{{build}}/disk.hdf --keys $'game\n'
+    just image {{ build }}/GAME.X
+    cd {{ emu }} && just build-play
+    {{ emu }}/build-host/x68k-play --iplrom {{ emu }}/rom/iplrom.dat \
+      --hdd {{ justfile_directory() }}/{{ build }}/disk.hdf --keys $'game\n'
 
 # ───── テスト ──────────────────────────────────────────────────────────────
 
@@ -123,13 +123,14 @@ play: build
 # 失敗が「ロジックの誤り」か「載せ方の誤り」かを切り分けられる。
 [doc('core/ のホストネイティブテストを実行する')]
 test:
-    mkdir -p {{build}}
+    mkdir -p {{ build }}
     clang -std=c17 -O1 -g -Wall -Wextra -Werror \
-      -o {{build}}/test x68k/test/test_main.c x68k/core/level.c \
+      -o {{ build }}/test x68k/test/test_main.c x68k/core/level.c \
       x68k/core/player.c x68k/core/enemy.c x68k/core/arrow.c \
       x68k/core/item.c x68k/core/boss.c x68k/core/game.c \
       x68k/core/sound.c x68k/assets/levels.inc.c
-    ./{{build}}/test
+    ./{{ build }}/test
+    PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s x68k/test -p 'test_*.py'
 
 # 全ステージが本当にクリアできるかを探索で確かめる。
 #
@@ -138,17 +139,17 @@ test:
 # 区別できない。探索させれば区別が付く。
 [doc('全ステージ + ボスが通せることを探索で確かめる')]
 solve:
-    mkdir -p {{build}}
-    clang -std=c17 -O2 -Wall -Wextra -o {{build}}/solve \
+    mkdir -p {{ build }}
+    clang -std=c17 -O2 -Wall -Wextra -o {{ build }}/solve \
       x68k/test/solve.c x68k/core/level.c x68k/core/player.c \
       x68k/core/enemy.c x68k/core/arrow.c x68k/core/item.c \
       x68k/core/boss.c x68k/core/game.c x68k/core/sound.c x68k/assets/levels.inc.c
-    ./{{build}}/solve
+    ./{{ build }}/solve
 
 [doc('エミュレータ上で実際に動かして状態を検査する')]
 e2e: build
-    just image {{build}}/GAME.X
-    X68K_STACKCHAN={{emu}} BUILD_DIR={{build}} bash x68k/test/e2e.sh
+    just image {{ build }}/GAME.X
+    X68K_STACKCHAN={{ emu }} BUILD_DIR={{ build }} bash x68k/test/e2e.sh
 
 # ───── lint / format ───────────────────────────────────────────────────────
 
@@ -173,4 +174,4 @@ gitleaks:
 
 [doc('ビルド成果物を消す')]
 clean:
-    rm -rf {{build}}
+    rm -rf {{ build }}

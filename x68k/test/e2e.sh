@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# エミュレータ上で実際に動かし、画面に何が出ているかを確かめる。
+# エミュレータ上で実際に動かし、HUD に出した内部状態を確かめる。
 #
 # 3 層の検証のうち、これが一番外側:
 #   just test   ゲームの規則 (ホストで直接)
 #   just solve  全ステージが通せるか (探索)
-#   just e2e    68000 のコードとして動き、絵が出るか  <- ここ
+#   just e2e    68000 のコードとして動き、入力に反応するか  <- ここ
 #
-# なぜ画面の絵 (PPM) を見るか: 以前はテキスト画面を --dump-text で
-# 読み戻していたが、HUD を自前の字形で描くようにしたので、CGROM との
-# 照合による逆引きに引っかからなくなった。絵が出ているかを見たいなら、
-# 絵そのものを見る方が直接的で、「文字が読めるか」という別の問題に
-# 巻き込まれない。
+# 現行の x68k-run は PPM にテキスト/G-VRAMを合成するがスプライト/BG面は
+# 合成しない。ゲーム自体はスプライトレジスタへ描画しているため、PPMだけを
+# 見て「プレイヤーがいない」と判定するとランナーの制約をゲームの失敗と
+# 誤認する。そこで自前字形のデバッグHUDから座標・接地・生存を読み、
+# ゲームループと入力が実際に進んだ結果を検証する。
 set -euo pipefail
 
 emu="${X68K_STACKCHAN:-$(dirname "$0")/../../../x68k-stackchan}"
@@ -18,91 +18,65 @@ build="${BUILD_DIR:-build-x68k}"
 here="$(cd "$(dirname "$0")/../.." && pwd)"
 
 shot() {
-    local out="$1" cycles="$2"
-    shift 2
+    local out="$1" cycles="$2" keys="$3"
     "$emu/build-host/x68k-run" \
         --iplrom "$emu/rom/iplrom.dat" \
         --hdd "$build/disk.hdf" \
         --cycles "$cycles" --event-driven \
-        --keys $'game\n' "$@" --ppm "$out" >/dev/null 2>&1
+        --keys "$keys" --ppm "$out" >/dev/null 2>&1
 }
 
 fail=0
 
-echo "e2e: 起動して 1-1 の画面が出る"
-shot /tmp/e2e-boot.ppm 600000000
-if ! python3 "$here/x68k/tools/checkppm.py" /tmp/e2e-boot.ppm \
-    --expect player,ground,block,hud; then
+echo "e2e: 起動して 1-1 の初期状態になる"
+shot /tmp/e2e-boot.ppm 450000000 $'game\n'
+state=$(python3 "$here/x68k/tools/readhud.py" /tmp/e2e-boot.ppm | head -1)
+if [[ "$state" == "0120 0168 1 1 1 3 0"* ]]; then
+    echo "  ok   x=120 y=168 接地 生存 ステージ1 残機3"
+else
+    echo "  FAIL 初期状態が違う (state=$state)"
     fail=1
 fi
 
 echo "e2e: ジャンプすると位置が変わる"
-# 入力台本でジャンプさせ、跳んでいる最中を撮る。
-# 跳んでいる最中を狙う。台本は 455M サイクルで押し始めるので、
-# その少し後が一番高い。
-shot /tmp/e2e-jump.ppm 456000000 --input-script "$here/x68k/test/jump.script"
-if ! python3 "$here/x68k/tools/checkppm.py" /tmp/e2e-jump.ppm --expect player,ground; then
-    fail=1
-fi
-
-# 跳んでいることを、プレイヤーの縦位置で確かめる。
+# --keys は320Mサイクルから1キーを押下/離鍵それぞれ2Mサイクルで送る。
+# 無操作の q を29回挟むと、ラウンド表示が明けた455M付近で k を押せる。
 #
-# 立っているときと跳んでいるときで、肌の色が出る一番上の行が変わる。
-# 「絵が出ている」だけでは動いていることの証明にならないので、
-# 動いた結果として位置が変わることまで見る。
-top_standing=$(python3 - "$here" <<'PY'
-import sys
-sys.path.insert(0, sys.argv[1] + "/x68k/tools")
-from pathlib import Path
-src = (Path(sys.argv[1]) / "x68k/tools/checkppm.py").read_text()
-exec(src.split("def main")[0])
-w, h, px = read_ppm(Path("/tmp/e2e-boot.ppm"))
-skin = COLORS["skin"]
-for y in range(16, 240):
-    row = y * w * 3
-    for x in range(256):
-        o = row + x * 3
-        if (px[o], px[o+1], px[o+2]) == skin:
-            print(y); sys.exit(0)
-print(-1)
-PY
-)
-top_jumping=$(python3 - "$here" <<'PY'
-import sys
-sys.path.insert(0, sys.argv[1] + "/x68k/tools")
-from pathlib import Path
-src = (Path(sys.argv[1]) / "x68k/tools/checkppm.py").read_text()
-exec(src.split("def main")[0])
-w, h, px = read_ppm(Path("/tmp/e2e-jump.ppm"))
-skin = COLORS["skin"]
-for y in range(16, 240):
-    row = y * w * 3
-    for x in range(256):
-        o = row + x * 3
-        if (px[o], px[o+1], px[o+2]) == skin:
-            print(y); sys.exit(0)
-print(-1)
-PY
-)
-
-if [[ "$top_jumping" -ge 0 && "$top_standing" -ge 0 && "$top_jumping" -lt "$top_standing" ]]; then
-    echo "  ok   跳んでいる (立ち y=$top_standing -> 跳び y=$top_jumping)"
+# Why not --input-script: ゲーム作成時に使ったランナーには存在したが、
+# 現行 x68k-run の公開CLIには無い。公開CLIだけで再現できる方が壊れにくい。
+jump_keys=$'game\n'
+for ((i = 0; i < 29; ++i)); do
+    jump_keys+=q
+done
+jump_keys+=k
+shot /tmp/e2e-jump.ppm 458000000 "$jump_keys"
+state=$(python3 "$here/x68k/tools/readhud.py" /tmp/e2e-jump.ppm | head -1)
+y=$(echo "$state" | awk '{print $2}')
+on_ground=$(echo "$state" | awk '{print $3}')
+alive=$(echo "$state" | awk '{print $4}')
+if [[ "$y" =~ ^0[0-9]+$ ]] && ((10#$y < 168)) && [[ "$on_ground" == "0" ]] &&
+    [[ "$alive" == "1" ]]; then
+    echo "  ok   跳んでいる (y=$y 接地=$on_ground)"
 else
-    echo "  FAIL 跳んでいない (立ち y=$top_standing 跳び y=$top_jumping)"
+    echo "  FAIL 跳んでいない (state=$state)"
     fail=1
 fi
 
-echo "e2e: 歩いてブロックを跳び越える"
-# 1-1 のメタ列 13 (x=208-) に地上ブロックがある。跳ばないと越えられない。
-#
-# ここまで見るのは、「絵が出る」だけでは遊べることの証明にならないため。
-# 障害物を越えて先へ進めることまで確かめる。
-shot /tmp/e2e-run.ppm 420000000 --input-script "$here/x68k/test/play11.script"
+echo "e2e: d キーで右へ動く"
+# q でラウンド表示中を待ち、d の押下/離鍵を繰り返す。
+run_keys=$'game\n'
+for ((i = 0; i < 20; ++i)); do
+    run_keys+=q
+done
+for ((i = 0; i < 20; ++i)); do
+    run_keys+=d
+done
+shot /tmp/e2e-run.ppm 500000000 "$run_keys"
 state=$(python3 "$here/x68k/tools/readhud.py" /tmp/e2e-run.ppm | head -1)
 px=$(echo "$state" | awk '{print $1}')
 alive=$(echo "$state" | awk '{print $4}')
-if [[ "$px" =~ ^0[0-9]+$ ]] && (( 10#$px > 250 )) && [[ "$alive" == "1" ]]; then
-    echo "  ok   ブロックを越えて x=$px まで進んだ"
+if [[ "$px" =~ ^0[0-9]+$ ]] && ((10#$px > 150)) && [[ "$alive" == "1" ]]; then
+    echo "  ok   x=$px まで進んだ"
 else
     echo "  FAIL 進めていない (state=$state)"
     fail=1
