@@ -28,6 +28,12 @@ shot() {
 
 fail=0
 
+echo "e2e: GAME.X はタイトルで入力を待つ"
+shot /tmp/e2e-title.ppm 390000000 $'game\n'
+if ! python3 "$here/x68k/tools/checkppm.py" /tmp/e2e-title.ppm --expect title; then
+    fail=1
+fi
+
 # Human68kでGAME.Xを起動し、タイトルが出た後の400Mサイクル付近で
 # STARTを押す。qはゲームが使わないため、時刻調整だけに使える。
 start_keys=$'game\n'
@@ -35,6 +41,12 @@ for ((i = 0; i < 15; ++i)); do
     start_keys+=q
 done
 start_keys+=$'\n'
+
+echo "e2e: START後に原作のラウンド画面を表示する"
+shot /tmp/e2e-round.ppm 410000000 "$start_keys"
+if ! python3 "$here/x68k/tools/checkppm.py" /tmp/e2e-round.ppm --expect round; then
+    fail=1
+fi
 
 echo "e2e: 起動して 1-1 の初期状態になる"
 shot /tmp/e2e-boot.ppm 450000000 "$start_keys"

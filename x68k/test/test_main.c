@@ -844,6 +844,34 @@ static void test_title_waits_for_start(void)
     CHECK_EQ(g.state, GS_ROUND);
 }
 
+static void test_title_menu_selection(void)
+{
+    printf("進行: タイトルのメニューを上下移動して決定する\n");
+
+    Game g;
+    game_init(&g);
+    g.stage = 2;
+
+    game_update(&g, BTN_DOWN);
+    CHECK_EQ(g.title_selection, 1);
+    game_update(&g, 0);
+    game_update(&g, BTN_DOWN);
+    CHECK_EQ(g.title_selection, 2);
+    game_update(&g, 0);
+    game_update(&g, BTN_A);
+    CHECK_EQ(g.state, GS_TITLE);  // OPTIONは原作どおり飾り。
+
+    game_update(&g, 0);
+    game_update(&g, BTN_UP);
+    CHECK_EQ(g.title_selection, 1);
+    game_update(&g, 0);
+    game_update(&g, BTN_A);
+    CHECK_EQ(g.state, GS_ROUND);
+    CHECK_EQ(g.stage, 2);
+    CHECK_EQ(g.lives, 3);
+    CHECK_EQ(g.score, 0);
+}
+
 // 1-4 をクリアしたらエンディングへ進むこと。
 static void test_last_stage_goes_to_ending(void)
 {
@@ -1320,6 +1348,7 @@ int main(void)
     test_reaching_right_edge_clears();
     test_clear_advances_stage();
     test_title_waits_for_start();
+    test_title_menu_selection();
     test_last_stage_goes_to_ending();
     test_pause_freezes_world();
     test_death_costs_a_life();

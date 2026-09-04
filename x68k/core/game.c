@@ -92,6 +92,7 @@ void game_init(Game *g)
     g->next_extend = EXTEND_STEP;
     g->checkpoint = 0;
     g->paused = 0;
+    g->title_selection = 0;
     g->coins = 0;
     g->prev_buttons = 0;
     g->frame = 0;
@@ -203,6 +204,8 @@ void game_update_with_sound(Game *g, uint8_t buttons, SoundFrame *sound)
     ++g->frame;
 
     const int start_pressed = (buttons & BTN_START) != 0 && (g->prev_buttons & BTN_START) == 0;
+    const int confirm_pressed =
+        (buttons & (BTN_START | BTN_A)) != 0 && (g->prev_buttons & (BTN_START | BTN_A)) == 0;
 
     // 音は必ず 1 フレーム進める。
     //
@@ -215,8 +218,26 @@ void game_update_with_sound(Game *g, uint8_t buttons, SoundFrame *sound)
 
     if (g->state == GS_TITLE)
     {
-        if (start_pressed)
+        const int down_pressed = (buttons & BTN_DOWN) != 0 && (g->prev_buttons & BTN_DOWN) == 0;
+        const int up_pressed = (buttons & BTN_UP) != 0 && (g->prev_buttons & BTN_UP) == 0;
+        if (down_pressed && g->title_selection < 2)
         {
+            ++g->title_selection;
+        }
+        if (up_pressed && g->title_selection > 0)
+        {
+            --g->title_selection;
+        }
+        const int is_option = g->title_selection == 2;
+        if (confirm_pressed && !is_option)
+        {
+            const int selected_stage = g->title_selection == 0 ? 0 : g->stage;
+            g->stage = selected_stage;
+            g->lives = 3;
+            g->score = 0;
+            g->next_extend = EXTEND_STEP;
+            g->checkpoint = 0;
+            g->coins = 0;
             start_stage(g);
         }
         g->prev_buttons = buttons;

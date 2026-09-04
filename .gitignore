@@ -2,3 +2,4 @@
 build/
 *.o
 build-x68k/
+__pycache__/

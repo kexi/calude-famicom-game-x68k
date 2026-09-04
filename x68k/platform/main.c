@@ -56,6 +56,51 @@ static void wait_vsync(void)
     }
 }
 
+static int player_pose(const Game *game, uint8_t buttons, uint8_t *animation_timer)
+{
+    const int is_dying = game->state == GS_DYING;
+    if (is_dying)
+    {
+        return VIDEO_POSE_DEAD;
+    }
+
+    const int attack_timer = game->arrows.attack_timer;
+    if (attack_timer >= 8)
+    {
+        return VIDEO_POSE_ATTACK_1;
+    }
+    if (attack_timer >= 4)
+    {
+        return VIDEO_POSE_ATTACK_2;
+    }
+    if (attack_timer > 0)
+    {
+        return VIDEO_POSE_ATTACK_3;
+    }
+
+    if (!game->player.on_ground)
+    {
+        if (game->player.vel_y < 0)
+        {
+            return VIDEO_POSE_JUMP_RISE;
+        }
+        if (game->player.vel_y == 0)
+        {
+            return VIDEO_POSE_JUMP_APEX;
+        }
+        return VIDEO_POSE_JUMP_FALL;
+    }
+
+    const int is_walking = (buttons & (BTN_LEFT | BTN_RIGHT)) != 0;
+    if (!is_walking)
+    {
+        return VIDEO_POSE_STAND;
+    }
+
+    ++*animation_timer;
+    return VIDEO_POSE_RUN_1 + ((*animation_timer >> 2) & 3u);
+}
+
 int main(void)
 {
     // ハードウェアを直に叩くのでスーパーバイザへ移る。
@@ -76,10 +121,11 @@ int main(void)
     video_init();
     audio_init();
     hud_clear();
-    video_clear_scene();
+    video_show_title();
 
     int shown_stage = game.stage;
     int shown_state = game.state;
+    uint8_t player_animation_timer = 0;
     static uint8_t shown_coins[8];
 
     for (;;)
@@ -88,17 +134,27 @@ int main(void)
 
         static SoundFrame sound;
         game_update_with_sound(&game, buttons, &sound);
-        const int is_non_gameplay = game.state == GS_TITLE || game.state == GS_ENDING;
+        const int is_static_scene =
+            game.state == GS_TITLE || game.state == GS_ROUND || game.state == GS_ENDING;
 
         if (game.state != shown_state)
         {
-            const int was_non_gameplay = shown_state == GS_TITLE || shown_state == GS_ENDING;
+            const int was_static_scene =
+                shown_state == GS_TITLE || shown_state == GS_ROUND || shown_state == GS_ENDING;
             hud_clear();
-            if (is_non_gameplay)
+            if (game.state == GS_TITLE)
+            {
+                video_show_title();
+            }
+            else if (game.state == GS_ROUND)
+            {
+                video_show_round(game.stage);
+            }
+            else if (game.state == GS_ENDING)
             {
                 video_clear_scene();
             }
-            else if (was_non_gameplay)
+            else if (was_static_scene)
             {
                 video_set_stage(game.stage);
             }
@@ -108,7 +164,7 @@ int main(void)
         // ステージが変わったら BG を組み直す。
         if (game.stage != shown_stage)
         {
-            if (!is_non_gameplay)
+            if (!is_static_scene)
             {
                 video_set_stage(game.stage);
             }
@@ -146,38 +202,57 @@ int main(void)
 
         video_set_scroll(scroll);
 
-        if (is_non_gameplay)
+        if (is_static_scene)
         {
-            video_hide_from(0);
+            if (game.state == GS_TITLE)
+            {
+                video_put_title_cursor(game.title_selection);
+                video_hide_from(1);
+            }
+            else
+            {
+                video_hide_from(0);
+            }
             audio_commit(&sound);
             hud_draw(&game);
-            hud_debug_line(&game);
+            if (game.state == GS_ENDING)
+            {
+                hud_debug_line(&game);
+            }
             continue;
         }
 
         // プレイヤー。無敵中は 2 フレームに 1 回消して点滅させる。
         const int blink = game.star_timer > 0 && (game.frame & 2u) != 0u;
+        const int pose = player_pose(&game, buttons, &player_animation_timer);
         if (blink)
         {
-            video_put_player(-32, -32, 0);
+            video_put_player(-32, -32, 0, VIDEO_POSE_STAND);
         }
         else
         {
             video_put_player((int)(game.player.world_x - scroll), player_y(&game.player),
-                             game.player.facing);
+                             game.player.facing, pose);
         }
 
         // 敵。
         for (int i = 0; i < ENEMY_COUNT; ++i)
         {
             const Enemy *e = &game.enemies.e[i];
-            const int visible = e->flag == ENEMY_ALIVE || e->flag == ENEMY_HARDENED;
+            const int has_visible_state =
+                e->flag == ENEMY_ALIVE || e->flag == ENEMY_HARDENED || e->flag == ENEMY_DYING;
+            const int is_dying_blink =
+                e->flag == ENEMY_DYING && e->timer < 13 && (e->timer & 2) != 0;
+            const int visible = has_visible_state && !is_dying_blink;
             if (!visible)
             {
-                video_put_enemy(i, -32, -32, e->type, 0);
+                video_put_enemy(i, -32, -32, e->type, 0, 0, 0);
                 continue;
             }
-            video_put_enemy(i, (int)(e->x - scroll), e->y, e->type, e->flag == ENEMY_HARDENED);
+            const int hurt = e->flag == ENEMY_DYING;
+            const int wing_up = (game.enemies.frame_count & 8u) != 0u;
+            video_put_enemy(i, (int)(e->x - scroll), e->y, e->type, e->flag == ENEMY_HARDENED, hurt,
+                            wing_up);
         }
 
         // 矢。

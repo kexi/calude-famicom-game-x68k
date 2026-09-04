@@ -150,8 +150,6 @@ void hud_draw(const Game *g)
 {
     if (g->state == GS_TITLE)
     {
-        put_text(11, 6, "CALUDE KODO");
-        put_text(12, 9, "PUSH START");
         return;
     }
 
@@ -164,6 +162,16 @@ void hud_draw(const Game *g)
         put_text(7, 20, "GOROMAN AND CLAUDE");
         put_text(12, 24, "THE END");
         put_text(11, 27, "PRESS START");
+        return;
+    }
+
+    if (g->state == GS_ROUND)
+    {
+        put_text(13, 1, "STAGE");
+        put_text(14, 2, "1-");
+        put_char(16, 2, (char)('1' + g->stage));
+        put_text(11, 5, "KARYUDO X");
+        put_num(21, 5, (uint32_t)(g->lives > 9 ? 9 : g->lives), 1);
         return;
     }
 
@@ -198,10 +206,6 @@ void hud_draw(const Game *g)
 
     switch (g->state)
     {
-        case GS_ROUND:
-            put_text(10, row, "STAGE 1-");
-            put_char(18, row, (char)('1' + g->stage));
-            break;
         case GS_CLEAR:
             put_text(9, row, "STAGE CLEAR!");
             break;

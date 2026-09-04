@@ -33,11 +33,8 @@
 #define STATE_TIME_CLEAR 240
 #define STATE_TIME_DEAD 60
 #define STATE_TIME_OVER 240
-// ラウンド表示の長さ。
-//
-// 原作は 150 フレーム (2.5 秒) だが、まだ「STAGE 1-1」の絵を出していないので
-// 短くしてある。長いと、操作を受け付けない時間が意味もなく続く。
-#define STATE_TIME_ROUND 30
+// 原作と同じ2.5秒間、ラウンド画面を表示する。
+#define STATE_TIME_ROUND 150
 
 // 中間フラグを通過したとみなすワールド X。
 #define CHECKPOINT_X 472
@@ -55,6 +52,7 @@ typedef struct
     uint32_t next_extend;
     uint8_t checkpoint;
     uint8_t paused;
+    uint8_t title_selection;
 
     Player player;
     EnemyWorld enemies;

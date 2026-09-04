@@ -78,13 +78,32 @@ def count_colors(w: int, h: int, px: bytes, top: int, bottom: int) -> dict[str, 
     return counts
 
 
+def title_stats(w: int, h: int, px: bytes) -> tuple[int, int, tuple[int, int, int, int]]:
+    """原寸タイトル領域の明色画素数・色数・4象限の明色画素数を返す。"""
+    colors: set[tuple[int, int, int]] = set()
+    colored = 0
+    quadrants = [0, 0, 0, 0]
+    for y in range(min(240, h)):
+        for x in range(min(256, w)):
+            offset = (y * w + x) * 3
+            color = (px[offset], px[offset + 1], px[offset + 2])
+            is_colored = max(color) >= 32
+            if not is_colored:
+                continue
+            colors.add(color)
+            colored += 1
+            quadrant = (2 if y >= 120 else 0) + (1 if x >= 128 else 0)
+            quadrants[quadrant] += 1
+    return colored, len(colors), tuple(quadrants)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("ppm", type=Path)
     ap.add_argument(
         "--expect",
         default="",
-        help="出ていてほしいものをカンマ区切りで (player/ground/block/hud/enemy)",
+        help="出ていてほしいものをカンマ区切りで (player/ground/block/hud/enemy/title/round)",
     )
     ap.add_argument("--dump", action="store_true", help="色の分布を出す")
     args = ap.parse_args()
@@ -94,10 +113,15 @@ def main() -> int:
     # ゲームの絵は上端 16 ラインが HUD、その下が本編。
     hud = count_colors(w, h, px, 0, 16)
     game = count_colors(w, h, px, 16, 240)
+    title_colored, title_colors, title_quadrants = title_stats(w, h, px)
 
     if args.dump:
         print("HUD 部分:", {k: v for k, v in hud.items() if v > 0})
         print("ゲーム部分:", {k: v for k, v in game.items() if v > 0})
+        print(
+            f"タイトル領域: 明色={title_colored} 色数={title_colors} "
+            f"4象限={title_quadrants}"
+        )
 
     checks = {
         # プレイヤーは肌と服の両方が出る。
@@ -108,6 +132,20 @@ def main() -> int:
         "enemy": game["enemy"] > 0 or game["stone"] > 0,
         # HUD はテキスト画面の色で描かれる。
         "hud": hud["text"] > 0,
+        # 黒地に全面イラストが転送され、単色の代替画面ではないこと。
+        # 画素の正確な変換はmkspritesのユニットテストが担う。
+        "title": (
+            title_colored > 15000
+            and title_colors >= 8
+            and min(title_quadrants) > 1000
+        ),
+        # ラウンド画面は左上に台詞、右下にタイトルから切り出した顔がある。
+        "round": (
+            4000 < title_colored < 8000
+            and title_colors >= 8
+            and title_quadrants[0] > 500
+            and title_quadrants[3] > 3000
+        ),
     }
 
     fail = 0

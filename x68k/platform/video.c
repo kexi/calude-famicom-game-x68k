@@ -2,272 +2,96 @@
 
 #include "video.h"
 
+#include "../core/enemy.h"
+#include "../core/item.h"
 #include "../core/level.h"
 #include "../core/rules.h"
 #include "hw.h"
 
 // PCG のパターン番号の割り当て。
 //
-// 16x16 パターン 1 個 = 128 バイト。42 個ほどしか使わないので
-// 256 個の枠には余裕がある (原作の CHR バンク切り替えは不要になった)。
+// 16x16 パターン 1 個 = 128 バイト。Cynthia の PCG 領域は128枠で、
+// 背景を0番台、タイトルカーソルを63番、アクターを64番台へ分ける。
 #define PAT_EMPTY 0
-#define PAT_GROUND 1  // 地面 (草 + 土)
-#define PAT_BLOCK 2   // ブロック
-#define PAT_PLAYER_TOP 3
-#define PAT_PLAYER_BOTTOM 4
-#define PAT_ENEMY 5
-#define PAT_BAT 6
-#define PAT_ARROW_H 7
-#define PAT_ARROW_V 8
-#define PAT_ENEMY_STONE 9
-#define PAT_BAT_STONE 10
-#define PAT_ITEM 11
-#define PAT_BOSS 12
+#define PAT_GROUND 1
+#define PAT_DIRT 2
+#define PAT_BLOCK 3
+#define PAT_COIN 4
+#define PAT_FLAG_TOP 5
+#define PAT_FLAG_POLE 6
+#define PAT_FLAG_GROUND 7
+#define PAT_CHECKPOINT_FLAG 8
+#define PAT_PLAYER_BASE 64
+#define PAT_PLAYER_DEAD_LEFT 86
+#define PAT_PLAYER_DEAD_RIGHT 87
+#define PAT_ENEMY 88
+#define PAT_ENEMY_HURT 89
+#define PAT_BAT 90
+#define PAT_BAT_WING 91
+#define PAT_ENEMY_STONE 92
+#define PAT_BAT_STONE 93
+#define PAT_ARROW_H 94
+#define PAT_ARROW_V 95
+#define PAT_ITEM_STAR 96
+#define PAT_ITEM_POWER 97
+#define PAT_ITEM_1UP 98
+#define PAT_BOSS 99
+#define NES_ACTOR_PATTERN_COUNT 39
+#define NES_BACKGROUND_PATTERN_COUNT 18
+#define NES_TITLE_BITMAP_ROWS 240
+#define PAT_TITLE_CURSOR 63
 
-// パレットブロック 0 の色番号。
-#define COL_TRANSPARENT 0
-#define COL_SKY 1
-#define COL_GRASS 2
-#define COL_DIRT 3
-#define COL_BLOCK 4
-#define COL_SKIN 5
-#define COL_CLOTH 6
-#define COL_ENEMY 7
-#define COL_STONE 8
-#define COL_ARROW 9
-#define COL_ITEM 10
-#define COL_BOSS 11
+extern const uint8_t g_nes_actor_patterns[NES_ACTOR_PATTERN_COUNT][128];
+extern const uint8_t g_nes_background_patterns[NES_BACKGROUND_PATTERN_COUNT][128];
+extern const uint8_t g_nes_mountain_map[16][13];
+extern const uint8_t g_nes_title_bitmap[NES_TITLE_BITMAP_ROWS][128];
+extern const uint8_t g_nes_round_bitmaps[4][NES_TITLE_BITMAP_ROWS][128];
+extern const uint8_t g_nes_title_cursor_pattern[1][128];
+extern const uint16_t g_nes_game_palettes[4][16];
+extern const uint16_t g_nes_title_palette[16];
 
-// X68000 のパレットは GRB555 + 下位 1bit が輝度。
-// 上位から G(5) R(5) B(5) I(1) の順に詰める。
-static uint16_t grb(int r, int g, int b)
+static void put_sprite(int index, int x, int y, int pattern, int hflip);
+
+static void set_palette(int stage)
 {
-    return (uint16_t)(((g & 31) << 11) | ((r & 31) << 6) | ((b & 31) << 1) | 1);
+    const int palette_index = (stage >= 0 && stage < 4) ? stage : 0;
+    for (int color = 0; color < 16; ++color)
+    {
+        poke16(VC_TEXT_PALETTE + (uint32_t)color * 2u, g_nes_game_palettes[palette_index][color]);
+    }
 }
 
-static void set_palette(void)
+static void load_actor_patterns(void)
 {
-    // テキスト/スプライト共通の 16 色。色 0 は透明なので中身は問わない。
-    poke16(VC_TEXT_PALETTE + COL_TRANSPARENT * 2, 0);
-    poke16(VC_TEXT_PALETTE + COL_SKY * 2, grb(2, 3, 12));
-    poke16(VC_TEXT_PALETTE + COL_GRASS * 2, grb(6, 24, 8));
-    poke16(VC_TEXT_PALETTE + COL_DIRT * 2, grb(18, 10, 4));
-    poke16(VC_TEXT_PALETTE + COL_BLOCK * 2, grb(24, 18, 8));
-    poke16(VC_TEXT_PALETTE + COL_SKIN * 2, grb(31, 22, 16));
-    poke16(VC_TEXT_PALETTE + COL_CLOTH * 2, grb(28, 8, 8));
-    poke16(VC_TEXT_PALETTE + COL_ENEMY * 2, grb(26, 6, 20));
-    poke16(VC_TEXT_PALETTE + COL_STONE * 2, grb(16, 16, 16));
-    poke16(VC_TEXT_PALETTE + COL_ARROW * 2, grb(30, 28, 20));
-    poke16(VC_TEXT_PALETTE + COL_ITEM * 2, grb(31, 31, 6));
-    poke16(VC_TEXT_PALETTE + COL_BOSS * 2, grb(31, 4, 10));
+    const uint32_t base = SPR_VRAM + PAT_PLAYER_BASE * 128u;
+    for (int pattern = 0; pattern < NES_ACTOR_PATTERN_COUNT; ++pattern)
+    {
+        for (int offset = 0; offset < 128; ++offset)
+        {
+            poke8(base + (uint32_t)pattern * 128u + (uint32_t)offset,
+                  g_nes_actor_patterns[pattern][offset]);
+        }
+    }
 }
 
-// 16x16 パターンを 1 色で塗る。
-//
-// PCG の 16x16 は 8x8 を 4 つ (左上→右上→左下→右下) 並べたもので、
-// 1 ドット 4bit。1 バイトに 2 ドットが入り、上位ニブルが左。
-static void fill_pattern(int pattern, uint8_t color)
+static void load_background_patterns(void)
+{
+    for (int pattern = 0; pattern < NES_BACKGROUND_PATTERN_COUNT; ++pattern)
+    {
+        for (int offset = 0; offset < 128; ++offset)
+        {
+            poke8(SPR_VRAM + (uint32_t)pattern * 128u + (uint32_t)offset,
+                  g_nes_background_patterns[pattern][offset]);
+        }
+    }
+}
+
+static void copy_pattern_to_vram(int pattern, const uint8_t *source)
 {
     const uint32_t base = SPR_VRAM + (uint32_t)pattern * 128u;
-    const uint8_t packed = (uint8_t)((color << 4) | color);
-    for (uint32_t i = 0; i < 128u; ++i)
+    for (int offset = 0; offset < 128; ++offset)
     {
-        poke8(base + i, packed);
-    }
-}
-
-// 16x16 パターンの 1 ドットを塗る。
-static void set_pattern_pixel(int pattern, int x, int y, uint8_t color)
-{
-    // 8x8 が 4 つ並ぶので、どの 8x8 かを先に決める。
-    const int cell = (y >= 8 ? 2 : 0) + (x >= 8 ? 1 : 0);
-    const int ix = x & 7;
-    const int iy = y & 7;
-    const uint32_t base = SPR_VRAM + (uint32_t)pattern * 128u + (uint32_t)cell * 32u;
-    const uint32_t addr = base + (uint32_t)iy * 4u + (uint32_t)(ix >> 1);
-
-    const uint8_t old = peek8(addr);
-    const uint8_t shifted =
-        (ix & 1) ? (old & 0xF0u) | (color & 0x0Fu) : (old & 0x0Fu) | (uint8_t)(color << 4);
-    poke8(addr, shifted);
-}
-
-static void build_patterns(void)
-{
-    // 空 (透明)。
-    fill_pattern(PAT_EMPTY, COL_TRANSPARENT);
-
-    // 地面: 上 4 ドットが草、その下が土。
-    fill_pattern(PAT_GROUND, COL_DIRT);
-    for (int y = 0; y < 4; ++y)
-    {
-        for (int x = 0; x < 16; ++x)
-        {
-            set_pattern_pixel(PAT_GROUND, x, y, COL_GRASS);
-        }
-    }
-
-    // ブロック: 枠を暗くして立体に見せる。
-    fill_pattern(PAT_BLOCK, COL_BLOCK);
-    for (int i = 0; i < 16; ++i)
-    {
-        set_pattern_pixel(PAT_BLOCK, i, 0, COL_DIRT);
-        set_pattern_pixel(PAT_BLOCK, i, 15, COL_DIRT);
-        set_pattern_pixel(PAT_BLOCK, 0, i, COL_DIRT);
-        set_pattern_pixel(PAT_BLOCK, 15, i, COL_DIRT);
-    }
-
-    // プレイヤーは 16x32 = 16x16 パターン 2 枚。
-    // 顔と体が分かる程度の絵にしておく (Phase 2 の目的は「見える」こと)。
-    fill_pattern(PAT_PLAYER_TOP, COL_TRANSPARENT);
-    for (int y = 2; y < 14; ++y)
-    {
-        for (int x = 3; x < 13; ++x)
-        {
-            set_pattern_pixel(PAT_PLAYER_TOP, x, y, COL_SKIN);
-        }
-    }
-    // 目。左右で位置を変えないので、反転しても違和感が出にくい。
-    set_pattern_pixel(PAT_PLAYER_TOP, 5, 7, COL_TRANSPARENT);
-    set_pattern_pixel(PAT_PLAYER_TOP, 10, 7, COL_TRANSPARENT);
-
-    fill_pattern(PAT_PLAYER_BOTTOM, COL_TRANSPARENT);
-    for (int y = 0; y < 12; ++y)
-    {
-        for (int x = 2; x < 14; ++x)
-        {
-            set_pattern_pixel(PAT_PLAYER_BOTTOM, x, y, COL_CLOTH);
-        }
-    }
-    // 脚。
-    for (int y = 12; y < 16; ++y)
-    {
-        for (int x = 3; x < 7; ++x)
-        {
-            set_pattern_pixel(PAT_PLAYER_BOTTOM, x, y, COL_CLOTH);
-        }
-        for (int x = 9; x < 13; ++x)
-        {
-            set_pattern_pixel(PAT_PLAYER_BOTTOM, x, y, COL_CLOTH);
-        }
-    }
-}
-
-// 敵と矢のパターンを作る。
-static void build_actor_patterns(void)
-{
-    // 決意マン: 四角い体に目。
-    fill_pattern(PAT_ENEMY, COL_TRANSPARENT);
-    for (int y = 2; y < 16; ++y)
-    {
-        for (int x = 1; x < 15; ++x)
-        {
-            set_pattern_pixel(PAT_ENEMY, x, y, COL_ENEMY);
-        }
-    }
-    set_pattern_pixel(PAT_ENEMY, 5, 6, COL_TRANSPARENT);
-    set_pattern_pixel(PAT_ENEMY, 10, 6, COL_TRANSPARENT);
-
-    // コウモリ: 横に広い羽。
-    fill_pattern(PAT_BAT, COL_TRANSPARENT);
-    for (int x = 0; x < 16; ++x)
-    {
-        for (int y = 6; y < 10; ++y)
-        {
-            set_pattern_pixel(PAT_BAT, x, y, COL_ENEMY);
-        }
-    }
-    for (int y = 4; y < 12; ++y)
-    {
-        for (int x = 6; x < 10; ++x)
-        {
-            set_pattern_pixel(PAT_BAT, x, y, COL_ENEMY);
-        }
-    }
-
-    // 硬化した敵は石の色で別のパターンを持つ。
-    //
-    // Why not パレットブロックを変えて同じ絵を使い回さないか:
-    // このエミュレータのテキスト/スプライトパレットは 16 色しかなく
-    // (実機は 16 色 x 16 ブロック)、ブロック 1 の位置へ書くと折り返して
-    // ブロック 0 を壊す。実際それで画面全体が灰色になった。
-    // PCG の枠は 256 個あって余っているので、パターンを分ける方が安全。
-    fill_pattern(PAT_ENEMY_STONE, COL_TRANSPARENT);
-    for (int y = 2; y < 16; ++y)
-    {
-        for (int x = 1; x < 15; ++x)
-        {
-            set_pattern_pixel(PAT_ENEMY_STONE, x, y, COL_STONE);
-        }
-    }
-
-    fill_pattern(PAT_BAT_STONE, COL_TRANSPARENT);
-    for (int x = 0; x < 16; ++x)
-    {
-        for (int y = 6; y < 10; ++y)
-        {
-            set_pattern_pixel(PAT_BAT_STONE, x, y, COL_STONE);
-        }
-    }
-    for (int y = 4; y < 12; ++y)
-    {
-        for (int x = 6; x < 10; ++x)
-        {
-            set_pattern_pixel(PAT_BAT_STONE, x, y, COL_STONE);
-        }
-    }
-
-    // 矢: 横向きと縦向き。
-    fill_pattern(PAT_ARROW_H, COL_TRANSPARENT);
-    for (int x = 2; x < 14; ++x)
-    {
-        set_pattern_pixel(PAT_ARROW_H, x, 7, COL_ARROW);
-        set_pattern_pixel(PAT_ARROW_H, x, 8, COL_ARROW);
-    }
-    for (int i = 0; i < 4; ++i)
-    {
-        set_pattern_pixel(PAT_ARROW_H, 13 - i, 7 - i, COL_ARROW);
-        set_pattern_pixel(PAT_ARROW_H, 13 - i, 8 + i, COL_ARROW);
-    }
-
-    fill_pattern(PAT_ARROW_V, COL_TRANSPARENT);
-    for (int y = 2; y < 14; ++y)
-    {
-        set_pattern_pixel(PAT_ARROW_V, 7, y, COL_ARROW);
-        set_pattern_pixel(PAT_ARROW_V, 8, y, COL_ARROW);
-    }
-    for (int i = 0; i < 4; ++i)
-    {
-        set_pattern_pixel(PAT_ARROW_V, 7 - i, 3 + i, COL_ARROW);
-        set_pattern_pixel(PAT_ARROW_V, 8 + i, 3 + i, COL_ARROW);
-    }
-}
-
-// アイテムとボスのパターン。
-static void build_extra_patterns(void)
-{
-    // アイテム: 星形に近い菱形。種類ごとの描き分けはしない
-    // (色を変えるにはパレットブロックが要り、このエミュレータでは使えない)。
-    fill_pattern(PAT_ITEM, COL_TRANSPARENT);
-    for (int y = 0; y < 16; ++y)
-    {
-        const int half = (y < 8) ? y : (15 - y);
-        for (int x = 7 - half; x <= 8 + half; ++x)
-        {
-            if (x >= 0 && x < 16)
-            {
-                set_pattern_pixel(PAT_ITEM, x, y, COL_ITEM);
-            }
-        }
-    }
-
-    // ボス: 大きめの四角に目。32x32 を 16x16 x4 で組むが、
-    // パターンは 1 つを使い回して 4 枚並べる。
-    fill_pattern(PAT_BOSS, COL_BOSS);
-    for (int i = 0; i < 16; ++i)
-    {
-        set_pattern_pixel(PAT_BOSS, i, 0, COL_TRANSPARENT);
-        set_pattern_pixel(PAT_BOSS, 0, i, COL_TRANSPARENT);
+        poke8(base + (uint32_t)offset, source[offset]);
     }
 }
 
@@ -296,6 +120,16 @@ void video_build_stage(void)
         }
     }
 
+    // 原作と同じ32タイル周期の山並み。X68000では2x2タイルを1 PCGへ
+    // まとめているので、16メタ列周期の生成済みパターン表になる。
+    for (int col = 0; col < LEVEL_METACOLS; ++col)
+    {
+        for (int cy = 0; cy < 13; ++cy)
+        {
+            set_bg_cell(col, cy, g_nes_mountain_map[col & 15][cy]);
+        }
+    }
+
     // 1 メタ列 = 16px = BG セル 1 個。ステージの 64 メタ列がそのまま
     // BG の 64 セルに 1:1 で対応する。
     for (int col = 0; col < LEVEL_METACOLS; ++col)
@@ -306,9 +140,10 @@ void video_build_stage(void)
         // セル行は 200/16 = 12.5 → 12 行目から下。
         if (feature != FEAT_PIT)
         {
-            for (int cy = GROUND_TOP_Y / BG_CELL_SIZE; cy < 15; ++cy)
+            set_bg_cell(col, GROUND_TOP_Y / BG_CELL_SIZE, PAT_GROUND);
+            for (int cy = GROUND_TOP_Y / BG_CELL_SIZE + 1; cy < 15; ++cy)
             {
-                set_bg_cell(col, cy, PAT_GROUND);
+                set_bg_cell(col, cy, PAT_DIRT);
             }
         }
 
@@ -318,7 +153,7 @@ void video_build_stage(void)
         // パターンを増やすと PCG の割り当てが動き、他の絵がずれる元になる。
         if (level_has_coin(col))
         {
-            set_bg_cell(col, 176 / BG_CELL_SIZE, PAT_ITEM);
+            set_bg_cell(col, 176 / BG_CELL_SIZE, PAT_COIN);
         }
 
         // ブロックを置く。上端 Y からセル行を求める。
@@ -332,10 +167,25 @@ void video_build_stage(void)
             }
         }
     }
+
+    // 中間旗はNES行19、ゴール旗は行12から立つ。地面と同じPCGセルを
+    // 共有する最下段だけは、ポールと草を合成した専用パターンを使う。
+    set_bg_cell(29, 9, PAT_CHECKPOINT_FLAG);
+    set_bg_cell(29, 10, PAT_FLAG_POLE);
+    set_bg_cell(29, 11, PAT_FLAG_POLE);
+    set_bg_cell(29, 12, PAT_FLAG_GROUND);
+
+    set_bg_cell(63, 6, PAT_FLAG_TOP);
+    for (int cy = 7; cy < 12; ++cy)
+    {
+        set_bg_cell(63, cy, PAT_FLAG_POLE);
+    }
+    set_bg_cell(63, 12, PAT_FLAG_GROUND);
 }
 
 void video_clear_scene(void)
 {
+    poke16(VC_DISPLAY, VC_DISPLAY_TEXT | VC_DISPLAY_SPRITE);
     for (int cy = 0; cy < BG_CELLS_Y; ++cy)
     {
         for (int cx = 0; cx < BG_CELLS_X; ++cx)
@@ -345,6 +195,60 @@ void video_clear_scene(void)
     }
     video_hide_from(0);
     video_set_scroll(0);
+}
+
+static void show_graphic_bitmap(const uint8_t bitmap[NES_TITLE_BITMAP_ROWS][128])
+{
+    // G-VRAMは16色512x512。原作画面を左上の256x240へ原寸で置く。
+    poke16(VC_MODE, 0x0000u);
+    for (int color = 0; color < 16; ++color)
+    {
+        poke16(VC_GRAPHIC_PALETTE + (uint32_t)color * 2u, g_nes_title_palette[color]);
+    }
+    // テキスト面も原作タイトルのパレット0・色1へ合わせる。
+    poke16(VC_TEXT_PALETTE + 2u, g_nes_title_palette[1]);
+    for (int y = 0; y < NES_TITLE_BITMAP_ROWS; ++y)
+    {
+        const uint32_t row = GVRAM + (uint32_t)y * GVRAM_BYTES_PER_LINE;
+        for (int packed_x = 0; packed_x < 128; ++packed_x)
+        {
+            const uint8_t packed = bitmap[y][packed_x];
+            poke16(row + (uint32_t)packed_x * 4u, (uint16_t)(packed >> 4));
+            poke16(row + (uint32_t)packed_x * 4u + 2u, (uint16_t)(packed & 0x0Fu));
+        }
+    }
+
+    for (int cy = 0; cy < BG_CELLS_Y; ++cy)
+    {
+        for (int cx = 0; cx < BG_CELLS_X; ++cx)
+        {
+            set_bg_cell(cx, cy, PAT_EMPTY);
+        }
+    }
+    video_hide_from(0);
+    video_set_scroll(0);
+    // テキスト/スプライトをG-VRAMより手前に置き、ページ0だけを表示する。
+    poke16(VC_PRIORITY, 0x0104u);
+    poke16(VC_DISPLAY, VC_DISPLAY_TEXT | VC_DISPLAY_SPRITE | VC_DISPLAY_GRAPHIC0);
+}
+
+void video_show_title(void)
+{
+    show_graphic_bitmap(g_nes_title_bitmap);
+    copy_pattern_to_vram(PAT_TITLE_CURSOR, g_nes_title_cursor_pattern[0]);
+}
+
+void video_show_round(int stage)
+{
+    const int safe_stage = (stage >= 0 && stage < 4) ? stage : 0;
+    show_graphic_bitmap(g_nes_round_bitmaps[safe_stage]);
+}
+
+void video_put_title_cursor(int selection)
+{
+    static const int kCursorY[3] = {122, 136, 150};
+    const int safe_selection = (selection >= 0 && selection < 3) ? selection : 0;
+    put_sprite(0, 44, kCursorY[safe_selection], PAT_TITLE_CURSOR, 0);
 }
 
 void video_set_scroll(int32_t scroll_x)
@@ -364,34 +268,46 @@ static void put_sprite(int index, int x, int y, int pattern, int hflip)
     poke16(base + 6, 3);  // プライオリティ (0 は非表示)
 }
 
-void video_put_player(int x, int y, int facing)
+void video_put_player(int x, int y, int facing, int pose)
 {
-    // 16x32 はスプライト 2 枚。上下に並べる。
-    put_sprite(0, x, y, PAT_PLAYER_TOP, facing);
-    put_sprite(1, x, y + 16, PAT_PLAYER_BOTTOM, facing);
+    const int is_dead = pose == VIDEO_POSE_DEAD;
+    if (is_dead)
+    {
+        // 原作の横倒れは32x16。通常時より左へ8px、下へ16pxずらす。
+        const int left_pattern = facing ? PAT_PLAYER_DEAD_RIGHT : PAT_PLAYER_DEAD_LEFT;
+        const int right_pattern = facing ? PAT_PLAYER_DEAD_LEFT : PAT_PLAYER_DEAD_RIGHT;
+        put_sprite(0, x - 8, y + 16, left_pattern, facing);
+        put_sprite(1, x + 8, y + 16, right_pattern, facing);
+        return;
+    }
+
+    const int safe_pose =
+        (pose >= VIDEO_POSE_STAND && pose <= VIDEO_POSE_ATTACK_3) ? pose : VIDEO_POSE_STAND;
+    const int pattern = PAT_PLAYER_BASE + safe_pose * 2;
+    put_sprite(0, x, y, pattern, facing);
+    put_sprite(1, x, y + 16, pattern + 1, facing);
 }
 
-// 硬化した敵は色を変えて、足場になっていることが見て分かるようにする。
+// 硬化色は生成時に別パターンへ焼き込む。
 //
-// Why not 別のパターンを用意しないか: パレットブロックを変えるだけで
-// 済む。PCG の枠は余っているが、同じ絵の色違いのためにパターンを
-// 2 つ持つと、絵を直すときに両方を直す羽目になる。
-void video_put_enemy(int slot, int x, int y, int type, int hardened)
+// Why not パレットブロックを切り替えるか: 現行エミュレータは共有16色だけを
+// 実装しており、ブロック1以降がブロック0へ折り返す。生成器なら同じNESタイル
+// から通常色と石色を作れるため、絵を二重管理せず実機とエミュレータの両方で動く。
+void video_put_enemy(int slot, int x, int y, int type, int hardened, int hurt, int wing_up)
 {
     int pattern;
-    if (type == 1)
+    const int is_bat = type == ENEMY_BAT || type == ENEMY_FLOATER;
+    if (is_bat)
     {
-        pattern = hardened ? PAT_BAT_STONE : PAT_BAT;
+        pattern = hardened ? PAT_BAT_STONE : (wing_up ? PAT_BAT_WING : PAT_BAT);
     }
     else
     {
-        pattern = hardened ? PAT_ENEMY_STONE : PAT_ENEMY;
+        pattern = hardened ? PAT_ENEMY_STONE : (hurt ? PAT_ENEMY_HURT : PAT_ENEMY);
     }
     const uint32_t base = SPR_REG_BASE + (uint32_t)(2 + slot) * 8u;
     poke16(base + 0, (uint16_t)(x + SPR_COORD_OFFSET));
     poke16(base + 2, (uint16_t)(y + SPR_COORD_OFFSET));
-    // 硬化中はパレットブロック 1 を使う。ブロック 1 の色は
-    // set_palette() が石の灰色で埋めてある。
     poke16(base + 4, (uint16_t)pattern);
     poke16(base + 6, 3);
 }
@@ -413,11 +329,19 @@ void video_put_arrow(int slot, int x, int y, int dir)
 
 void video_put_item(int slot, int x, int y, int kind)
 {
-    (void)kind;
+    int pattern = PAT_ITEM_STAR;
+    if (kind == ITEM_POWER)
+    {
+        pattern = PAT_ITEM_POWER;
+    }
+    else if (kind == ITEM_1UP)
+    {
+        pattern = PAT_ITEM_1UP;
+    }
     const uint32_t base = SPR_REG_BASE + (uint32_t)(7 + slot) * 8u;
     poke16(base + 0, (uint16_t)(x + SPR_COORD_OFFSET));
     poke16(base + 2, (uint16_t)(y + SPR_COORD_OFFSET));
-    poke16(base + 4, (uint16_t)PAT_ITEM);
+    poke16(base + 4, (uint16_t)pattern);
     poke16(base + 6, 3);
 }
 
@@ -431,7 +355,7 @@ void video_put_boss(int x, int y, int flashing)
         const uint32_t base = SPR_REG_BASE + (uint32_t)(9 + i) * 8u;
         poke16(base + 0, (uint16_t)(x + dx + SPR_COORD_OFFSET));
         poke16(base + 2, (uint16_t)(y + dy + SPR_COORD_OFFSET));
-        poke16(base + 4, (uint16_t)PAT_BOSS);
+        poke16(base + 4, (uint16_t)(PAT_BOSS + i));
         poke16(base + 6, (uint16_t)(flashing ? 0 : 3));
     }
 }
@@ -439,6 +363,10 @@ void video_put_boss(int x, int y, int flashing)
 void video_set_stage(int stage)
 {
     level_set_stage(stage);
+    poke16(VC_DISPLAY, VC_DISPLAY_TEXT | VC_DISPLAY_SPRITE);
+    set_palette(stage);
+    load_background_patterns();
+    load_actor_patterns();
     video_build_stage();
 }
 
@@ -453,10 +381,9 @@ void video_hide_from(int first_index)
 
 void video_init(void)
 {
-    set_palette();
-    build_patterns();
-    build_actor_patterns();
-    build_extra_patterns();
+    set_palette(0);
+    load_background_patterns();
+    load_actor_patterns();
 
     // BG0 を表示し、ネームテーブル 0 を使う。
     // bit0 = BG0 表示、bit1 = BG0 のネームテーブル番号。

@@ -23,14 +23,36 @@ void video_build_stage(void);
 // タイトル/エンディング用にBGとスプライトを空にする。
 void video_clear_scene(void);
 
+// 原作の全面タイトル画像を表示する。
+void video_show_title(void);
+
+// 原作の台詞と顔を使ったラウンド開始画面を表示する。
+void video_show_round(int stage);
+
+// タイトルメニューの選択カーソルを置く。
+void video_put_title_cursor(int selection);
+
 // BG0 の横スクロール量を設定する。
 void video_set_scroll(int32_t scroll_x);
 
-// プレイヤーのスプライトを置く。x/y は画面座標。
-void video_put_player(int x, int y, int facing);
+#define VIDEO_POSE_STAND 0
+#define VIDEO_POSE_RUN_1 1
+#define VIDEO_POSE_RUN_2 2
+#define VIDEO_POSE_RUN_3 3
+#define VIDEO_POSE_RUN_4 4
+#define VIDEO_POSE_JUMP_RISE 5
+#define VIDEO_POSE_JUMP_APEX 6
+#define VIDEO_POSE_JUMP_FALL 7
+#define VIDEO_POSE_ATTACK_1 8
+#define VIDEO_POSE_ATTACK_2 9
+#define VIDEO_POSE_ATTACK_3 10
+#define VIDEO_POSE_DEAD 11
+
+// プレイヤーのスプライトを置く。x/y は画面座標、pose は原作の描画ポーズ。
+void video_put_player(int x, int y, int facing, int pose);
 
 // 敵を置く。hardened なら灰色のパレットで描く。
-void video_put_enemy(int slot, int x, int y, int type, int hardened);
+void video_put_enemy(int slot, int x, int y, int type, int hardened, int hurt, int wing_up);
 
 // 矢を置く。
 void video_put_arrow(int slot, int x, int y, int dir);

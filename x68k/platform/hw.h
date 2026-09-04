@@ -21,6 +21,13 @@
 // $E82600 のビット。bit5 = テキスト、bit6 = スプライト。
 #define VC_DISPLAY_TEXT 0x0020u
 #define VC_DISPLAY_SPRITE 0x0040u
+#define VC_DISPLAY_GRAPHIC0 0x0011u
+
+// --- グラフィックVRAM ($C00000) ------------------------------------------
+
+// 16色512x512モードでは1ドット1ワード、1行1024バイト。
+#define GVRAM 0xC00000u
+#define GVRAM_BYTES_PER_LINE 1024u
 
 // --- スプライトコントローラ (CYNTHIA) --------------------------------------
 
