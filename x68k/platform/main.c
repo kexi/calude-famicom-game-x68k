@@ -76,9 +76,10 @@ int main(void)
     video_init();
     audio_init();
     hud_clear();
-    video_set_stage(game.stage);
+    video_clear_scene();
 
     int shown_stage = game.stage;
+    int shown_state = game.state;
     static uint8_t shown_coins[8];
 
     for (;;)
@@ -87,11 +88,30 @@ int main(void)
 
         static SoundFrame sound;
         game_update_with_sound(&game, buttons, &sound);
+        const int is_non_gameplay = game.state == GS_TITLE || game.state == GS_ENDING;
+
+        if (game.state != shown_state)
+        {
+            const int was_non_gameplay = shown_state == GS_TITLE || shown_state == GS_ENDING;
+            hud_clear();
+            if (is_non_gameplay)
+            {
+                video_clear_scene();
+            }
+            else if (was_non_gameplay)
+            {
+                video_set_stage(game.stage);
+            }
+            shown_state = game.state;
+        }
 
         // ステージが変わったら BG を組み直す。
         if (game.stage != shown_stage)
         {
-            video_set_stage(game.stage);
+            if (!is_non_gameplay)
+            {
+                video_set_stage(game.stage);
+            }
             shown_stage = game.stage;
             for (int i = 0; i < 8; ++i)
             {
@@ -125,6 +145,15 @@ int main(void)
         wait_vsync();
 
         video_set_scroll(scroll);
+
+        if (is_non_gameplay)
+        {
+            video_hide_from(0);
+            audio_commit(&sound);
+            hud_draw(&game);
+            hud_debug_line(&game);
+            continue;
+        }
 
         // プレイヤー。無敵中は 2 フレームに 1 回消して点滅させる。
         const int blink = game.star_timer > 0 && (game.frame & 2u) != 0u;

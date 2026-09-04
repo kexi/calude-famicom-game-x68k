@@ -148,6 +148,25 @@ void hud_clear(void)
 
 void hud_draw(const Game *g)
 {
+    if (g->state == GS_TITLE)
+    {
+        put_text(11, 6, "CALUDE KODO");
+        put_text(12, 9, "PUSH START");
+        return;
+    }
+
+    if (g->state == GS_ENDING)
+    {
+        put_text(8, 6, "CONGRATULATIONS!");
+        put_text(5, 10, "ALL KETSUIMAN DEFEATED");
+        put_text(9, 12, "BY YOUR ACTION");
+        put_text(10, 18, "PRESENTED BY");
+        put_text(7, 20, "GOROMAN AND CLAUDE");
+        put_text(12, 24, "THE END");
+        put_text(11, 27, "PRESS START");
+        return;
+    }
+
     // 上端の行。残機とスコア。
     put_text(1, 0, "LIFE");
     put_num(6, 0, (uint32_t)(g->lives > 9 ? 9 : g->lives), 1);
@@ -171,6 +190,12 @@ void hud_draw(const Game *g)
     {
         put_char(6 + i, row, ' ');
     }
+    if (g->paused)
+    {
+        put_text(13, row, "PAUSE");
+        return;
+    }
+
     switch (g->state)
     {
         case GS_ROUND:

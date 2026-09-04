@@ -59,6 +59,9 @@ static void start_stage(Game *g)
         g->coin_taken[i] = 0;
     }
     sound_set_stage(&g->sound, g->stage);
+    g->sound.song = 0;
+    g->sound.playing = 1;
+    g->paused = 0;
 
     if (g->checkpoint)
     {
@@ -88,11 +91,17 @@ void game_init(Game *g)
     g->score = 0;
     g->next_extend = EXTEND_STEP;
     g->checkpoint = 0;
+    g->paused = 0;
     g->coins = 0;
     g->prev_buttons = 0;
     g->frame = 0;
     sound_init(&g->sound);
     start_stage(g);
+    // 電源投入時は原作と同じくタイトルで待つ。エンティティも先に
+    // 初期化しておくことで、デバッグHUDが未初期化値を読まないようにする。
+    g->state = GS_TITLE;
+    g->state_timer = 0;
+    g->sound.song = 1;
 }
 
 int32_t game_scroll(const Game *g) { return camera_scroll_for(g->player.world_x); }
@@ -125,16 +134,18 @@ static void update_state_timer(Game *g)
             break;
 
         case GS_CLEAR:
-            // 次のステージへ。最後をクリアしたら最初へ戻る。
-            //
-            // Why not エンディングへ行かないか: エンディング画面は
-            // まだ移植していない。1-4 をクリアしたら 1-1 へ戻し、
-            // 残機とスコアは持ち越す。周回できる形にしておく。
+            // 次のステージへ。最後をクリアしたらエンディングへ進む。
             g->checkpoint = 0;
             ++g->stage;
             if (g->stage >= NUM_STAGES)
             {
                 g->stage = 0;
+                g->state = GS_ENDING;
+                g->state_timer = 0;
+                g->sound.song = 1;
+                g->sound.step = 0;
+                g->sound.tick = 0;
+                break;
             }
             start_stage(g);
             break;
@@ -191,6 +202,8 @@ void game_update_with_sound(Game *g, uint8_t buttons, SoundFrame *sound)
 {
     ++g->frame;
 
+    const int start_pressed = (buttons & BTN_START) != 0 && (g->prev_buttons & BTN_START) == 0;
+
     // 音は必ず 1 フレーム進める。
     //
     // Why 先に進めるか: この関数は演出中や hitstop 中に早期 return する。
@@ -200,10 +213,46 @@ void game_update_with_sound(Game *g, uint8_t buttons, SoundFrame *sound)
     SoundFrame *sf = (sound != NULL) ? sound : &local;
     sound_update(&g->sound, sf);
 
+    if (g->state == GS_TITLE)
+    {
+        if (start_pressed)
+        {
+            start_stage(g);
+        }
+        g->prev_buttons = buttons;
+        return;
+    }
+
+    if (g->state == GS_ENDING)
+    {
+        if (start_pressed)
+        {
+            game_init(g);
+            // 押しっぱなしのSTARTでタイトルを素通りしないよう、現在の
+            // 入力を引き継ぐ。いったん離してから次のゲームを始める。
+            g->prev_buttons = buttons;
+        }
+        return;
+    }
+
     // 演出中は世界を動かさない。
     if (g->state != GS_PLAYING)
     {
         update_state_timer(g);
+        g->prev_buttons = buttons;
+        return;
+    }
+
+    if (start_pressed)
+    {
+        g->paused ^= 1u;
+        g->sound.playing = (uint8_t)!g->paused;
+        g->prev_buttons = buttons;
+        return;
+    }
+
+    if (g->paused)
+    {
         g->prev_buttons = buttons;
         return;
     }

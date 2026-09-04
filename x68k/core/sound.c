@@ -172,6 +172,13 @@ void sound_update(Sound *s, SoundFrame *out)
 
     if (!s->playing)
     {
+        // 停止中もキーオフを明示する。YM2151は最後の音を保持するため、
+        // 単にシーケンサを止めるだけではポーズ中も音が伸び続ける。
+        for (int i = 0; i < VOICE_SFX; ++i)
+        {
+            out->key_off[i] = 1;
+            s->last_note[i] = 0;
+        }
         return;
     }
 

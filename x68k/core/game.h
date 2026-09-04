@@ -25,6 +25,8 @@
 #define GS_CLEAR 1
 #define GS_DYING 2
 #define GS_GAMEOVER 3
+#define GS_TITLE 4
+#define GS_ENDING 5
 #define GS_ROUND 6
 
 // 演出の長さ (フレーム)。
@@ -52,6 +54,7 @@ typedef struct
     // 次にエクステンドする点 (100 点単位で 100 = 1 万点)。
     uint32_t next_extend;
     uint8_t checkpoint;
+    uint8_t paused;
 
     Player player;
     EnemyWorld enemies;

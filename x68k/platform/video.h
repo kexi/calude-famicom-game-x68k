@@ -20,6 +20,9 @@ void video_init(void);
 // 一度書けば、あとはスクロールレジスタを動かすだけで済む。
 void video_build_stage(void);
 
+// タイトル/エンディング用にBGとスプライトを空にする。
+void video_clear_scene(void);
+
 // BG0 の横スクロール量を設定する。
 void video_set_scroll(int32_t scroll_x);
 

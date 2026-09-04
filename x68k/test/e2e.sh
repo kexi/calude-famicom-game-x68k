@@ -28,8 +28,16 @@ shot() {
 
 fail=0
 
+# Human68kでGAME.Xを起動し、タイトルが出た後の400Mサイクル付近で
+# STARTを押す。qはゲームが使わないため、時刻調整だけに使える。
+start_keys=$'game\n'
+for ((i = 0; i < 15; ++i)); do
+    start_keys+=q
+done
+start_keys+=$'\n'
+
 echo "e2e: 起動して 1-1 の初期状態になる"
-shot /tmp/e2e-boot.ppm 450000000 $'game\n'
+shot /tmp/e2e-boot.ppm 450000000 "$start_keys"
 state=$(python3 "$here/x68k/tools/readhud.py" /tmp/e2e-boot.ppm | head -1)
 if [[ "$state" == "0120 0168 1 1 1 3 0"* ]]; then
     echo "  ok   x=120 y=168 接地 生存 ステージ1 残機3"
@@ -40,16 +48,17 @@ fi
 
 echo "e2e: ジャンプすると位置が変わる"
 # --keys は320Mサイクルから1キーを押下/離鍵それぞれ2Mサイクルで送る。
-# 無操作の q を29回挟むと、ラウンド表示が明けた455M付近で k を押せる。
+# START後にも無操作の q を12回挟むと、452M付近で k を押せる。
+# 短いタップなので、着地前の454Mサイクルで状態を読む。
 #
 # Why not --input-script: ゲーム作成時に使ったランナーには存在したが、
 # 現行 x68k-run の公開CLIには無い。公開CLIだけで再現できる方が壊れにくい。
-jump_keys=$'game\n'
-for ((i = 0; i < 29; ++i)); do
+jump_keys="$start_keys"
+for ((i = 0; i < 12; ++i)); do
     jump_keys+=q
 done
 jump_keys+=k
-shot /tmp/e2e-jump.ppm 458000000 "$jump_keys"
+shot /tmp/e2e-jump.ppm 454000000 "$jump_keys"
 state=$(python3 "$here/x68k/tools/readhud.py" /tmp/e2e-jump.ppm | head -1)
 y=$(echo "$state" | awk '{print $2}')
 on_ground=$(echo "$state" | awk '{print $3}')
@@ -64,8 +73,8 @@ fi
 
 echo "e2e: d キーで右へ動く"
 # q でラウンド表示中を待ち、d の押下/離鍵を繰り返す。
-run_keys=$'game\n'
-for ((i = 0; i < 20; ++i)); do
+run_keys="$start_keys"
+for ((i = 0; i < 2; ++i)); do
     run_keys+=q
 done
 for ((i = 0; i < 20; ++i)); do

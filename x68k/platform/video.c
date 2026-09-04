@@ -334,6 +334,19 @@ void video_build_stage(void)
     }
 }
 
+void video_clear_scene(void)
+{
+    for (int cy = 0; cy < BG_CELLS_Y; ++cy)
+    {
+        for (int cx = 0; cx < BG_CELLS_X; ++cx)
+        {
+            set_bg_cell(cx, cy, PAT_EMPTY);
+        }
+    }
+    video_hide_from(0);
+    video_set_scroll(0);
+}
+
 void video_set_scroll(int32_t scroll_x)
 {
     poke16(SPR_BG_SCROLL, (uint16_t)scroll_x);

@@ -830,10 +830,24 @@ static void test_clear_advances_stage(void)
     CHECK_EQ(g.stage, 1);
 }
 
-// 1-4 をクリアしたら 1-1 へ戻り、残機とスコアは持ち越すこと。
-static void test_last_stage_wraps(void)
+static void test_title_waits_for_start(void)
 {
-    printf("進行: 最後のステージをクリアすると最初へ戻る\n");
+    printf("進行: タイトルは START でゲームを始める\n");
+
+    Game g;
+    game_init(&g);
+    CHECK_EQ(g.state, GS_TITLE);
+
+    game_update(&g, 0);
+    CHECK_EQ(g.state, GS_TITLE);
+    game_update(&g, BTN_START);
+    CHECK_EQ(g.state, GS_ROUND);
+}
+
+// 1-4 をクリアしたらエンディングへ進むこと。
+static void test_last_stage_goes_to_ending(void)
+{
+    printf("進行: 最後のステージをクリアするとエンディングへ進む\n");
 
     Game g;
     game_init(&g);
@@ -849,8 +863,34 @@ static void test_last_stage_wraps(void)
     {
         game_update(&g, 0);
     }
-    CHECK_EQ(g.stage, 0);
+    CHECK_EQ(g.state, GS_ENDING);
     CHECK_EQ(g.lives, 2);
+
+    // STARTでタイトルへ戻る。押しっぱなしではゲームを開始しない。
+    game_update(&g, BTN_START);
+    CHECK_EQ(g.state, GS_TITLE);
+    game_update(&g, BTN_START);
+    CHECK_EQ(g.state, GS_TITLE);
+}
+
+static void test_pause_freezes_world(void)
+{
+    printf("進行: ポーズ中は世界が止まる\n");
+
+    Game g;
+    game_start_at(&g, 0);
+    g.state = GS_PLAYING;
+    const int32_t before = g.player.world_x;
+
+    game_update(&g, BTN_START);
+    CHECK_EQ(g.paused, 1);
+    game_update(&g, BTN_RIGHT);
+    CHECK_EQ(g.player.world_x, before);
+
+    game_update(&g, BTN_START);
+    CHECK_EQ(g.paused, 0);
+    game_update(&g, BTN_RIGHT);
+    CHECK(g.player.world_x > before);
 }
 
 static void test_death_costs_a_life(void)
@@ -1279,7 +1319,9 @@ int main(void)
 
     test_reaching_right_edge_clears();
     test_clear_advances_stage();
-    test_last_stage_wraps();
+    test_title_waits_for_start();
+    test_last_stage_goes_to_ending();
+    test_pause_freezes_world();
     test_death_costs_a_life();
     test_zero_lives_is_game_over();
     test_checkpoint_resumes_midway();
