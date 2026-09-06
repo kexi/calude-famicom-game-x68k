@@ -4,6 +4,8 @@ okf_version: "0.2"
 
 # ナレッジ索引
 
+* [前景16bit版CoreS3の実機計測](cores3-foreground-measurement.md) - 約7分プレイし計測。ゲーム中CPU約3.9MHz、描画28.4ms/frame・7.3fps、音声供給不足約60.8%。JIT無効下の基準値。
+
 * [CoreS3への書き込みと実機での前景16bit動作確認](cores3-device-verified.md) - hash検証つきで書き込み、実機でタイトル・ROUND・ゲーム本編まで到達。65536色前景の実機描画を確認。速度と音質は未計測。
 
 * [e2eの固定サイクル入力が起動時間の変化で破綻](e2e-input-timing.md) - --keysの固定刻みがGAME.X肥大化で崩れ全項目FAILしていた。--input-scriptの明示サイクルへ移し、判定器が読める4bitを選ぶよう変更して全項目成功。
