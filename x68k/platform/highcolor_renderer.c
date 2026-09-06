@@ -18,6 +18,21 @@ typedef struct
 } HcGlyph;
 
 static const uint16_t (*scene_background)[HC_WIDTH];
+
+// 簡略背景: 1行1色。
+//
+// Why: 遠景は 320x240 の実画像で、毎フレーム dirty 範囲ぶんを読み出して
+// scratch へ写している。実機で背景を消すと描画 27.7->22.2ms、CPU 4,987->5,715kHz
+// (+15%) になったので、この読み出しが最も重い単一要素である。
+// 画像をそのまま持つと 1 行 320 word を読むが、遠景は横方向の変化が乏しい
+// (空と山の帯) ので、行の代表色 1 word で置き換えれば読み出しが 320 分の 1 になる。
+// 代表色は hc_reset のときに 1 度だけ作る。
+static uint16_t background_row_color[HC_HEIGHT];
+#ifdef CALUDE_SIMPLE_BACKGROUND
+static int background_simplified = 1;
+#else
+static int background_simplified;
+#endif
 static const uint16_t (*actor_patterns)[256];
 static const uint16_t (*terrain_patterns)[256];
 static uint16_t shadow[HC_HEIGHT][HC_WIDTH];
@@ -87,6 +102,9 @@ void hc_reset(const uint16_t background[HC_HEIGHT][HC_WIDTH],
               const uint16_t terrain[HC_TERRAIN_COUNT][256])
 {
     scene_background = background;
+    // 行の代表色を作る。中央付近を採るのは、左右端が枠や暗部になりがちで
+    // 行全体の印象からずれるため。
+    for (int y = 0; y < HC_HEIGHT; ++y) background_row_color[y] = background[y][HC_WIDTH / 2];
     actor_patterns = actors;
     terrain_patterns = terrain;
     scroll_x = 0;
@@ -144,6 +162,19 @@ static void include_visible_terrain(int cy, int scroll, int *left, int *right)
     const int extends_right = window_right > *right;
     if (extends_left) *left = window_left;
     if (extends_right) *right = window_right;
+}
+
+// 遠景を「行1色」へ落とすかを切り替える。既定は実画像 (0)。
+//
+// 切り替えたら全画面を描き直す。影バッファは前の色を覚えているので、
+// dirty だけでは前の遠景が残る。
+void hc_set_background_detail(int simplified)
+{
+    const int next = simplified != 0;
+    const int unchanged = background_simplified == next;
+    if (unchanged) return;
+    background_simplified = next;
+    hc_invalidate();
 }
 
 void hc_set_scroll(int scroll)
@@ -306,11 +337,14 @@ static void compose_terrain(int y, int left, int right)
             continue;
         }
         const uint16_t *source = &terrain_patterns[pattern][row_offset + source_x];
-        for (; x < end; ++x)
+        uint16_t *out = &scratch[x];
+        uint16_t *const stop = &scratch[end];
+        x = end;
+        for (; out < stop; ++out)
         {
             const uint16_t color = *source++;
             const int opaque = color != 0;
-            if (opaque) scratch[x] = color;
+            if (opaque) *out = color;
         }
     }
 }
@@ -371,19 +405,50 @@ void hc_present(void)
         // 計測用: 遠景の読み出しを外し、背景合成の費用だけを切り分ける。
         for (int x = left; x < right; ++x) scratch[x] = 0;
 #else
-        for (int x = left; x < right; ++x) scratch[x] = scene_background[y][x];
+        if (background_simplified)
+        {
+            // 行1色。読み出しが 1 word で済む。
+            const uint16_t color = background_row_color[y];
+            uint16_t *out = &scratch[left];
+            for (int count = right - left; count > 0; --count) *out++ = color;
+        }
+        else
+        {
+            const uint16_t *bg = &scene_background[y][left];
+            uint16_t *out = &scratch[left];
+            for (int count = right - left; count > 0; --count) *out++ = *bg++;
+        }
 #endif
         compose_glyphs(y, left, right);
         compose_terrain(y, left, right);
         compose_sprites(y, left, right);
-        uint32_t address = GVRAM + (uint32_t)y * GVRAM_BYTES_PER_LINE + (uint32_t)left * 2u;
-        for (int x = left; x < right; ++x, address += 2u)
         {
-            const uint16_t color = scratch[x];
-            const int changed = force_present || shadow[y][x] != color;
-            if (!changed) continue;
-            poke16(address, color);
-            shadow[y][x] = color;
+            // Pointer-walk all three arrays so the inner loop uses (An)+ instead
+            // of indexed addressing; 68000 charges 18 cycles for d8(An,Xn.l) but
+            // only 12 for (An)+.
+            const uint16_t *src = &scratch[left];
+            uint16_t *shad = &shadow[y][left];
+            uint32_t address = GVRAM + (uint32_t)y * GVRAM_BYTES_PER_LINE + (uint32_t)left * 2u;
+            int count = right - left;
+            if (force_present)
+            {
+                for (; count > 0; --count, address += 2u)
+                {
+                    const uint16_t color = *src++;
+                    *shad++ = color;
+                    poke16(address, color);
+                }
+            }
+            else
+            {
+                for (; count > 0; --count, ++src, ++shad, address += 2u)
+                {
+                    const uint16_t color = *src;
+                    if (*shad == color) continue;
+                    *shad = color;
+                    poke16(address, color);
+                }
+            }
         }
         dirty_left[y] = HC_WIDTH;
         dirty_right[y] = 0;

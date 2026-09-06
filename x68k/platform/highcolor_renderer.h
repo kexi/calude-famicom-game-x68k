@@ -26,6 +26,10 @@ void hc_reset(const uint16_t background[HC_HEIGHT][HC_WIDTH],
 
 // Invalid cells/patterns are ignored. Horizontal scroll wraps at 1024 pixels.
 void hc_set_cell(int cx, int cy, int pattern);
+// 遠景を「行1色」へ落とすかを切り替える。既定は実画像。
+// 実機で遠景の読み出しが描画の最も重い単一要素だったので、速度が要るときに使う。
+void hc_set_background_detail(int simplified);
+
 void hc_set_scroll(int scroll);
 
 // Pattern is the absolute PCG number 64..108. Slots persist between presents;
