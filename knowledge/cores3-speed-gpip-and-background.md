@@ -64,6 +64,16 @@ JIT (`g_jitToggleRequests`) と主旋律ブースト (`g_melodyBoostEnabled`) �
 `hc_set_background_detail(int)` で切り替えられる。既定は実画像のまま。
 225frames の全画素試験は既定側で通る。
 
+# コミット状況
+
+簡略背景はこのリポジトリへコミット済み。
+
+**GPIP の既定 ON は未コミット。** GPIP ポーリング機構そのものが
+`/private/tmp/x68k-device-capture` の未コミット作業ツリーにしか無く、
+ghq の checkout (`~/ghq/github.com/kexi/x68k-stackchan`) には
+`gpipPoll` の文字列が 1 つも無い。作業ツリー側の変更が main へ入るときに
+`g_gpipPollEnabled{true}` も一緒に持っていく必要がある。
+
 # 30fps への距離
 
 30fps には概ね実効 10MHz 相当が要る。6,324 kHz は目標の 63%。
