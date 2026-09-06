@@ -1,13 +1,14 @@
 ---
 type: Attested Computation
 title: 65536色モードのタイトル
-description: 多色タイトルのホスト描画とCoreS3へのデータ書き込みを検証。実機起動・聴感確認は未実施。
+description: 多色タイトルのホスト描画・CoreS3書き込み・実機タイトルからゲームへの遷移を検証。音声供給不足と聴感確認は残る。
 status: draft
-generated: { by: codex, at: 2026-09-06T03:55:58Z }
+generated: { by: codex, at: 2026-09-06T04:01:15Z }
 verified:
   - { by: process:just-test, at: 2026-09-06T03:55:58Z }
   - { by: process:just-test-video, at: 2026-09-06T03:55:58Z }
   - { by: process:esptool-write-verify, at: 2026-09-06T03:55:58Z }
+  - { by: codex:device-frame-review, at: 2026-09-06T04:01:15Z }
 sources:
   - id: converter
     resource: ../x68k/tools/mkhighcolor.py
@@ -17,6 +18,12 @@ sources:
     resource: ../x68k/test/test_video.cpp
   - id: prompts
     resource: ../x68k/assets/title-highcolor-prompts.md
+  - id: device-title
+    resource: ../build-x68k/cores3-title-65536.png
+  - id: device-log
+    resource: ../build-x68k/cores3-title-65536.log
+  - id: device-stage
+    resource: ../build-x68k/cores3-stage-highcolor.png
 ---
 
 # 表示と素材
@@ -43,6 +50,26 @@ X68000を合成する。まばたきは32x24、ロゴ明滅は最大512点だけ
   0x410000へ書き込み、esptoolの`Hash of data verified`と終了コード0を確認。
   FW本体・NVS・音量40は変更していない。実機起動・実機スクショはこの時点では未確認。
 
+## push後の実機確認
+
+ゲームcommit `b931d855fb8a1e9900fce97e45cbf2546f326d07` をorigin/mainへpushした後、
+CoreS3で `capture-lcd` を実行。cold boot後に `^J+game\r`、15秒待機し、
+320x240フレームを取得して多色イラスト・メニュー・X68000表記を目視確認した。
+画像はフレームをPNGへ形式変換したもので、描き替えはしていない。[^device-title]
+
+ログでflashデータ905792bytes、FW ELF `b7a316c6d...`、主旋律gain_q8=2048、
+peak_limit=17000、master_volume=40を確認。観測中のfailed/rejected/droppedと
+empty_before_submitは0だが、missing_framesは増加しており、PCM供給不足の解消や
+実際の聴こえ方を保証する結果ではない。取得用USB接続時のリセット以外に
+今回のログで再起動は観測していない。[^device-log]
+
+実機タイトルPNGのSHA-256は`8495cc660168b7aacff57f80025322b6c83ede27b678532ad6164cc9061f82cd`。
+画像・生ログはローカルの無視対象へ保存し、コミットには含めない。
+
+同じcold boot条件で `WAIT=30 START_AFTER=15` を指定し、RETURNを一度送信した。
+取得した実機画面にプレイヤー・地形・敵・HUDを確認し、タイトルから通常ゲームへの
+切り替えが成立した。ラウンド途中のフレーム取得・全編プレイ・聴感確認は未実施。[^device-stage]
+
 GAME.XのSHA-256は`bb6b2e649e6e3e47b0f14da7a763e045d792476b2d1f806780fd7d137de30dea`。
 書込データは`1dc2fcc22140ead92412a13006aa0b27171489199f7bd082f90cf5b80502e675`。
 退避は`/private/tmp/x68k-title-flash.y8dgvy/storage-before-highcolor.bin`にローカル保存。
@@ -60,3 +87,6 @@ ROM・HDD・実機バックアップはコミットしない。
 [^video]: `sources.video`
 [^tests]: `sources.tests`
 [^prompts]: `sources.prompts`
+[^device-title]: `sources.device-title`
+[^device-log]: `sources.device-log`
+[^device-stage]: `sources.device-stage`
