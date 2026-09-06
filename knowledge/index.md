@@ -4,6 +4,16 @@ okf_version: "0.2"
 
 # ナレッジ索引
 
+* [e2eの固定サイクル入力が起動時間の変化で破綻](e2e-input-timing.md) - --keysの固定刻みがGAME.X肥大化で崩れ全項目FAILしていた。--input-scriptの明示サイクルへ移し、判定器が読める4bitを選ぶよう変更して全項目成功。
+
+* [スプライト属性ワードの反転bitが実機と不一致](sprite-attribute-bits.md) - ゲームとエミュレータの双方が反転にbit8/9を使い、実機のパレットblockを汚していた。両方をbit14/15へ是正し双方に回帰試験を追加。e2eも通したが実機確認は未達。
+
+* [標準GVRAMリング試作の初回計測と残る超過](foreground-ring-bench.md) - リング方式は全4面スクロールを約8倍高速化。逐次overlay復元と画素毎の再計算を除いてさらに約2.1倍縮め、通常場面は予算の約1.6倍まで到達した。
+
+* [全前景16bit描画のFable相談と採用条件](foreground-fable-review.md) - Fableは標準スクロールとリング描画を提案。Astraとソース照合し、互換性の先行是正・全16bit維持・未測定の復元方式と性能値を区別した。
+
+* [全前景の16bit化試作と性能上の未達](foreground-highcolor.md) - 全前景の直接色描画は試作で成功したが性能は未達。基準周期を訂正し、現ゲームとエミュ間で隠れていた標準互換性の不一致を追記。
+
 * [4bit・16bit表示モードの選択と継承](graphics-mode-selection.md) - 4bit/16bit選択と高色ROUNDを実装し、Wキー対応を修正。全画素回帰・実ゲスト起動・配布物一致・CoreS3書込みと撮影を検証。
 
 * [NESビルドツールのNix管理](nes-nix-toolchain.md) - cc65とGNU Makeを既存devShellへ追加し、Homebrewなしで原作NESの再ビルドを検証。
