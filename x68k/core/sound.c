@@ -344,7 +344,8 @@ void sound_update(Sound *s, SoundFrame *out)
             {
                 out->key_on[voice] = 1;
                 out->key_code[voice] = kMelodyKc[note];
-                out->volume[voice] = (uint8_t)(voice == VOICE_LEAD ? 18 : 32);
+                // マスターを上げるとドラムも増幅されるため、埋もれるタイトル旋律だけ補正する。
+                out->volume[voice] = (uint8_t)(voice == VOICE_LEAD ? 4 : 32);
             }
             s->last_note[voice] = note;
         }

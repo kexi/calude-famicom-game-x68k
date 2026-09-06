@@ -7,6 +7,38 @@
 #define TVRAM 0xE00000u
 #define TVRAM_BYTES_PER_LINE 128
 #define TVRAM_PLANE_SIZE 0x20000u
+#define DEBUG_COLUMNS (20 + ENEMY_COUNT * 6)
+
+// 0は未描画。空白も初回は4プレーンを消す必要があるためglyph+1を保存する。
+static uint8_t debug_glyphs[DEBUG_COLUMNS];
+static int text_initialized;
+static int dirty_left, dirty_top, dirty_right, dirty_bottom;
+
+static void mark_text_area(int left, int top, int right, int bottom)
+{
+    const int empty = dirty_right == 0;
+    if (empty)
+    {
+        dirty_left = left;
+        dirty_top = top;
+        dirty_right = right;
+        dirty_bottom = bottom;
+        return;
+    }
+    const int extends_left = left < dirty_left;
+    const int extends_top = top < dirty_top;
+    const int extends_right = right > dirty_right;
+    const int extends_bottom = bottom > dirty_bottom;
+    if (extends_left) dirty_left = left;
+    if (extends_top) dirty_top = top;
+    if (extends_right) dirty_right = right;
+    if (extends_bottom) dirty_bottom = bottom;
+}
+
+static void invalidate_debug_line(void)
+{
+    for (int col = 0; col < DEBUG_COLUMNS; ++col) debug_glyphs[col] = 0;
+}
 
 // 5x7 の字形を 8x16 のセルへ置く。
 //
@@ -97,6 +129,14 @@ static void put_char(int col, int row, char c)
         index = 0;
     }
 
+    const int cacheable = row == 0 && col >= 0 && col < DEBUG_COLUMNS;
+    if (cacheable)
+    {
+        const uint8_t glyph = (uint8_t)(index + 1);
+        const int unchanged = debug_glyphs[col] == glyph;
+        if (unchanged) return;
+    }
+
     const uint32_t base = TVRAM + (uint32_t)row * 16u * TVRAM_BYTES_PER_LINE + (uint32_t)col;
     for (int y = 0; y < 16; ++y)
     {
@@ -110,6 +150,8 @@ static void put_char(int col, int row, char c)
         for (uint32_t plane = 1; plane < 4; ++plane)
             poke8(base + plane * TVRAM_PLANE_SIZE + (uint32_t)y * TVRAM_BYTES_PER_LINE, 0);
     }
+    if (cacheable) debug_glyphs[col] = (uint8_t)(index + 1);
+    mark_text_area(col, row * 16, col + 1, row * 16 + 16);
 }
 
 // 10 進で書く。除算は使わない (68000 に 32bit 除算が無く、
@@ -139,33 +181,70 @@ static uint8_t cached_tens;
 void hud_clear(void)
 {
     cached_state = -1;
-    for (uint32_t off = 0; off < TVRAM_PLANE_SIZE * 4u; off += 2u)
+    invalidate_debug_line();
+    // 初回はHuman68kの文字が任意の場所にある。以後のTVRAM描画はHUDが所有する。
+    const int first_clear = !text_initialized;
+    if (first_clear)
     {
-        poke16(TVRAM + off, 0);
+        for (uint32_t off = 0; off < TVRAM_PLANE_SIZE * 4u; off += 2u) poke16(TVRAM + off, 0);
+        text_initialized = 1;
+        dirty_right = 0;
+        return;
     }
+    const int empty = dirty_right == 0;
+    if (empty) return;
+    for (uint32_t plane = 0; plane < 4; ++plane)
+        for (int y = dirty_top; y < dirty_bottom; ++y)
+        {
+            const uint32_t base =
+                TVRAM + plane * TVRAM_PLANE_SIZE + (uint32_t)y * TVRAM_BYTES_PER_LINE;
+            for (int x = dirty_left; x < dirty_right; ++x) poke8(base + (uint32_t)x, 0);
+        }
+    dirty_right = 0;
 }
 
 extern const uint8_t g_nes_font[64][8];
 
+static void nes_masked_byte(uint32_t offset, uint8_t mask, uint8_t bits, int color)
+{
+    for (int plane = 0; plane < 3; ++plane)
+    {
+        const uint32_t addr = TVRAM + (uint32_t)plane * TVRAM_PLANE_SIZE + offset;
+        const uint8_t previous = peek8(addr);
+        const uint8_t plane_bits = (color & (1 << plane)) ? bits : 0;
+        const uint8_t next = (previous & (uint8_t)~mask) | plane_bits;
+        const int changed = next != previous;
+        if (changed) poke8(addr, next);
+    }
+}
+
 static void nes_char(int x, int y, char c, int color)
 {
+    // 現在の原作HUDはy>=16。将来の上書きをキャッシュで隠さない。
+    const int overlaps_debug = y < 16 && y + 8 > 0;
+    if (overlaps_debug) invalidate_debug_line();
     const int index = c >= 32 && c < 96 ? c - 32 : 0;
+    const int shift = x & 7;
+    const uint8_t left_mask = (uint8_t)(0xffu >> shift);
+    const int split_byte = shift != 0;
     for (int dy = 0; dy < 8; ++dy)
-        for (int dx = 0; dx < 8; ++dx)
+    {
+        const uint32_t offset = (uint32_t)(y + dy) * TVRAM_BYTES_PER_LINE + (uint32_t)x / 8u;
+        const uint8_t glyph = g_nes_font[index][dy];
+        nes_masked_byte(offset, left_mask, (uint8_t)(glyph >> shift), color);
+        if (split_byte)
         {
-            const uint32_t offset =
-                (uint32_t)(y + dy) * TVRAM_BYTES_PER_LINE + (uint32_t)(x + dx) / 8u;
-            const uint8_t mask = (uint8_t)(128u >> ((x + dx) & 7));
-            const int opaque = (g_nes_font[index][dy] & (128u >> dx)) != 0;
-            for (int plane = 0; plane < 3; ++plane)
-            {
-                const uint32_t addr = TVRAM + (uint32_t)plane * TVRAM_PLANE_SIZE + offset;
-                const uint8_t previous = peek8(addr);
-                const int ink = opaque && (color & (1 << plane));
-                poke8(addr, ink ? previous | mask : previous & (uint8_t)~mask);
-            }
+            const uint8_t right_mask = (uint8_t)(0xffu << (8 - shift));
+            const uint8_t right_bits = (uint8_t)(glyph << (8 - shift));
+            nes_masked_byte(offset + 1u, right_mask, right_bits, color);
         }
+    }
+    mark_text_area(x / 8, y, (x + 7) / 8 + 1, y + 8);
 }
+
+#ifdef CALUDE_TEST_HUD_RASTER
+void hud_test_nes_char(int x, int y, char c, int color) { nes_char(x, y, c, color); }
+#endif
 
 static void nes_text(int x, int y, const char *text, int color)
 {

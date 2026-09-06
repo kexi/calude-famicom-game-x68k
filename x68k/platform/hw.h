@@ -10,6 +10,11 @@
 
 #include <stdint.h>
 
+// --- CRTC ($E80000) ---------------------------------------------------------
+
+#define CRTC_REG_BASE 0xE80000u
+#define CRTC_REG(index) (CRTC_REG_BASE + (uint32_t)(index) * 2u)
+
 // --- ビデオコントローラ ($E82000) -----------------------------------------
 
 #define VC_GRAPHIC_PALETTE 0xE82000u  // グラフィック用 256 色
@@ -34,6 +39,10 @@
 #define SPR_REG_BASE 0xEB0000u   // スプライトレジスタ 128 個 x 8 バイト
 #define SPR_BG_SCROLL 0xEB0800u  // BG0 の X/Y、BG1 の X/Y (ワード 4 つ)
 #define SPR_BG_CTRL 0xEB0808u    // BG 制御とスプライト面の表示許可
+#define SPR_H_TOTAL 0xEB080Au    // CRTC R00 と対応する水平総期間
+#define SPR_H_DISP 0xEB080Cu     // スプライト表示の水平開始位置
+#define SPR_V_DISP 0xEB080Eu     // スプライト表示の垂直開始位置
+#define SPR_RES 0xEB0810u        // スプライト画面の解像度
 #define SPR_VRAM 0xEB8000u       // PCG (32KB)
 
 // PCG の中での BG ネームテーブルの位置。

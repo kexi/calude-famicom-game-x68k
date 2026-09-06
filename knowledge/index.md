@@ -4,5 +4,53 @@ okf_version: "0.2"
 
 # ナレッジ索引
 
+* [65536色モードのタイトル](title-highcolor.md) - 多色タイトルのホスト描画とCoreS3へのデータ書き込みを検証。実機起動・聴感確認は未実施。
+
+* [タイトルのX68000表記とCoreS3右余白](title-x68000-label.md) - X68000表記をタイトル下部へ追加しホスト起動・描画を検証。CoreS3の右64pxは等倍左寄せによるゲーム領域外表示で、表示変更・実機再書き込みは未実施。
+
+* [CoreS3のトランペット風FM主旋律と出力ゲイン](cores3-fm-trumpet.md) - トランペット風主旋律を基本2倍へ変更しピークだけ圧縮。合成RMSは前候補比1.96倍。別ファーム誤書き込みから16MB構成も復元しタイトル表示を確認、聴感は確認待ち。
+
+* [CoreS3のFM旋律の再アタックと倍音修正](cores3-fm-melody.md) - 追加3dB版でも主旋律が小さすぎるとの報告。TL調整の余地がほぼなくなり、依頼されたトランペット風音色と専用ゲインの検証へ継続。
+
+* [CoreS3の画像再利用とHUD行単位更新](cores3-bitmap-hud-byte.md) - 同画像の全面再転写と文字の画素単位RMWを削減。診断版の単発実機計測は約9.65MHz・PCM不足約2.90%で、全不足解消は未達。
+
+* [CoreS3の実行開始位置別計測](cores3-run-profile.md) - 任意ONの1秒計測で画像転写・HUDの命令列を実機とELF間で照合。音声不足は約9%残り、最適化の評価は継続中。
+
+* [CoreS3音声不足のFable独立調査](cores3-fable-review.md) - Fableの原因候補をソースとログで照合。描画・JIT脱出・無音投入の追加計測が必要で、修正完了ではない。
+
+* [CoreS3のデバッグHUD差分描画](cores3-hud-cache.md) - 同値文字と状態遷移時の全消去を削減。範囲消去版は実機約9.05MHz、音声不足約8.25%が残る。
+
+* [CoreS3の厳密GPIP待機ループ最適化](cores3-gpip-macro.md) - 完全周回一括実行と追いつき時のPCMキュー破棄を修正。実機約6.38MHz、供給不足約37%は残る。
+
+* [CoreS3音声の停止・再開とストリーム寿命](cores3-audio-lifecycle.md) - 停止中の時計、古いPCM、スピーカー空成功を修正。ホスト検証と実機起動は成功したが実時間供給は未達。
+
+* [CoreS3のGPIPポーリング同期省略](cores3-gpip-poll.md) - イベント期限前のGPIP読取で不要な同期を省略。実機約5.09MHzで音声不足51.1%は残る。
+
+* [CoreS3の単項命令時間とシフト計算修正](cores3-unary-shift.md) - 単項命令・シフトの時間を修正しビット反復を一括計算化。ホストと実機を検証したが音声不足は残る。
+
+* [CoreS3の通常ALU命令時間修正](cores3-standard-timing.md) - 通常ALUの時間を幅・EA・方向別に修正し351ケースとUBSanを検証。音声供給不足の解消は未達。
+
+* [CoreS3の即値・quick演算時間修正](cores3-immediate-timing.md) - 即値6演算とADDQ/SUBQを幅・EA別の仕様時間へ修正。196ケースとUBSanを検証したが音声供給不足の解消は未達。
+
+* [CoreS3のJIT実行部IRAM配置比較](cores3-jit-iram.md) - JIT実行部960byteをIRAMへ移して単発比較したが、明確な改善を確認できず配置変更を撤回。音声不足は残る。
+
+* [CoreS3音声時計のScc命令時間修正](cores3-scc-timing.md) - Sccの4サイクル固定を条件・EA別時間へ修正し32ケースと実機起動を検証。音声不足解消は未完了。
+
+* [CoreS3の制御EA命令時間の修正](cores3-control-timing.md) - LEA・PEA・JMP・JSRのEA別時間を共通化し28ケースとUBSanを検証。音声供給不足の解消は未達。
+
 * [Human68k HDD へのファイル注入](human68k-hdd-injection.md) - 既存の起動可能HDDへGAME.Xを追加する方法と検証根拠
 * [X68000版の移植状況](x68k-port-status.md) - 原作との機能差と検証済み範囲
+* [CoreS3の処理速度・音声出力の改善設計](cores3-runtime-design.md) - 計測、音声バッファ所有権、描画負荷、ゲスト時間同期の段階的な改善方針と合格条件
+* [CoreS3音声バッファの所有権修正](cores3-audio-implementation.md) - 音声所有権と計測を修正しCoreS3へ適用。追加PCM領域による内部RAM不足をPSRAM配置で解消したが、ゲーム中の速度・音声供給不足は残る。
+* [CoreS3のJIT比較と描画時間予算](cores3-render-budget.md) - OPMの毎オペレータ初期化ガードを除去し、タイトル曲の合成最大時間が約32msから約3.7msへ改善。供給は約30.5ブロック/秒を維持したが全場面と長時間は未検証。
+* [CoreS3再生投入状態とゲーム開始の検証](cores3-playback-observations.md) - flashマップとSASI一括DMAで読み込み遅延を約219msから49msへ短縮し、STAGE 1-1開始表示まで投入前空状態0を確認。DMAアンダーラン・全場面・長時間は未検証。
+* [CoreS3のBG行キャッシュとJIT有効の延長観察](cores3-bg-row-cache.md) - BGの8byte行キャッシュで後半の平均描画31.6ms→30.5ms、CPU実効2.71→2.76MHz。変更前後の約171秒で投入前空状態0だが、全編操作・実DMAアンダーラン・長時間は未検証。
+* [CoreS3の押下・解放入力と音声供給試験](cores3-input-scenario.md) - 入力試験の受信待ちを修正し、8イベントの送信遅れが最大979ms→10ms。約110秒で音声空状態0を再確認したが、各操作・実DMA・音質の検証は未完了。
+* [CoreS3の描画前受け渡し確認とJIT内訳](cores3-frame-preflight.md) - 描画前チェックを追加したが約110秒で受け渡し待ちは0、速度は約2.69MHzで変わらず。JIT内訳の計測を追加し、CPU側の切り分けとDMA計測のESP依存除去を残す。
+* [CoreS3のDMA計測分離とJIT容量比較](cores3-jit-capacity-probe.md) - DMA計測のESP依存を除去。JITコード20KiB化はスロット2048→512へ縮退し約2.72→2.09MHzに悪化したため16KiBへ復元。音声キュー指標は0を維持したが最終性能・音質は未達。
+* [CoreS3のタイル世代管理準備と表示数更新](cores3-tile-generations.md) - 二重バッファの300タイル世代管理を単体実装し96フレームの疑似画素モデルと一致。表示数更新を定数時間化したが実機速度向上は未確認で、局所再合成への接続は残る。
+* [CoreS3の等倍局所合成接続](cores3-tiled-compositor.md) - 書き込み通知と等倍の二重バッファ局所合成を実機へ接続。約110秒の単発比較で後半CPU 2.59→3.20MHz、描画占有29→10%。音声キュー指標0だが10MHz・音質・ゲスト時間同期は未達。
+* [CoreS3音源のゲスト時刻通知とPCM蓄積](cores3-guest-audio-clock.md) - 音源MMIO前のゲスト時刻通知と640cycles/sampleのPCM蓄積を実装し、実行分割・短いFM音・満杯時の状態進行をホスト検証。M5接続・pacing・供給不足補完は未実装。
+* [CoreS3ゲスト同期再生と供給不足の顕在化](cores3-synchronized-playback.md) - ゲスト同期PCMをM5へ接続。約110秒で投入切れ0だが、後半の供給不足補完は67.5%、CPU約3.32MHz。ミュート・フェード・先行制限を実装したが実時間供給は未達。
+* [CoreS3のJIT鍵不一致とメモリ配分比較](cores3-jit-memory-split.md) - ゲーム中のJIT鍵不一致は未登録が主因。1024スロット・コード32KiBの単発比較で後半3.33→3.39MHz、音声不足67.35→66.71%。改善の再現性と実時間供給は未達。
+* [CoreS3音声時計に使うMOVE命令時間の修正](cores3-move-timing.md) - MOVE/MOVEAの4サイクル固定をMC68000のEA・幅別時間へ修正し通常実行とJITを統一。ホスト・UBSan・実機起動を検証したが、後半の音声不足56.8%と他命令の時間監査が残る。

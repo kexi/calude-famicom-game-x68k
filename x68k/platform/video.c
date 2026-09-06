@@ -44,6 +44,11 @@
 #define NES_BACKGROUND_PATTERN_COUNT 18
 #define NES_TITLE_BITMAP_ROWS 240
 #define PAT_TITLE_CURSOR 63
+#define GRAPHIC_MODE_INDEXED 0x0000u
+#define GRAPHIC_MODE_DIRECT 0x0003u
+#define GRAPHIC_MODE_UNKNOWN 0xFFFFu
+#define GRAPHIC_DISPLAY_DIRECT 0x007Fu
+#define TITLE_LOGO_MAX_PIXELS 512
 
 extern const uint8_t g_nes_actor_patterns[NES_ACTOR_PATTERN_COUNT][128];
 extern const uint8_t g_nes_background_patterns[NES_BACKGROUND_PATTERN_COUNT][128];
@@ -58,11 +63,82 @@ extern const uint8_t g_nes_eyes[4][24][16];
 extern const uint16_t g_nes_title_fades[8][16];
 extern const uint8_t g_nes_digits[10][8];
 extern const uint16_t g_nes_logo_fades[8][8];
+extern const uint16_t g_x68k_title_bitmap[NES_TITLE_BITMAP_ROWS][256];
+extern const uint8_t g_x68k_title_fallback[NES_TITLE_BITMAP_ROWS][128];
+extern const uint16_t g_x68k_title_eyes[4][24][32];
+extern const uint8_t g_x68k_title_eyes_fallback[4][24][16];
+extern const uint16_t g_x68k_title_logo_count;
+extern const uint16_t g_x68k_title_logo_positions[TITLE_LOGO_MAX_PIXELS];
+extern const uint16_t g_x68k_title_logo_colors[8][TITLE_LOGO_MAX_PIXELS];
 static int shown_eye = -1;
 static int shown_fade = -1;
 static int shown_selection = -1;
+static int shown_logo_phase = -1;
+static const void *resident_bitmap;
+static uint16_t resident_mode = GRAPHIC_MODE_UNKNOWN;
+static uint16_t graphic_mode = GRAPHIC_MODE_UNKNOWN;
+static uint8_t bitmap_dirty_mask;
+#define BITMAP_DIRTY_TITLE_EYE 1u
+#define BITMAP_DIRTY_ROUND_EYE 2u
+#define BITMAP_DIRTY_CURSOR 4u
+#define BITMAP_DIRTY_LIVES 8u
+#define BITMAP_DIRTY_LOGO 16u
 
 static void put_sprite(int index, int x, int y, int pattern, int hflip);
+
+static void invalidate_scene_overlays(void)
+{
+    shown_eye = -1;
+    shown_fade = -1;
+    shown_selection = -1;
+    shown_logo_phase = -1;
+}
+
+static int set_graphic_mode(uint16_t mode)
+{
+    const int mode_changed = graphic_mode != mode;
+    if (!mode_changed) return 0;
+
+    // 同じG-VRAM wordも色数によって意味が変わるため、旧画像を再利用しない。
+    poke16(VC_DISPLAY, 0);
+    poke16(VC_MODE, mode);
+    graphic_mode = mode;
+    resident_bitmap = 0;
+    resident_mode = GRAPHIC_MODE_UNKNOWN;
+    bitmap_dirty_mask = 0;
+    invalidate_scene_overlays();
+    return 1;
+}
+
+static void set_256x240_mode(void)
+{
+    // IOCS の低解像度 256x240 モードと同じ表示期間をゲーム自身で確立する。
+    // Human68k 起動直後の値を引き継ぐと、表示寸法が起動元の画面モードに
+    // 依存する。黒画面との因果関係は、別エミュレータでの再検証が必要。
+    static const uint16_t crtc_mode[] = {
+        0x0025u,  // R00: 水平総期間
+        0x0001u,  // R01: 水平同期終了
+        0x0000u,  // R02: 水平表示開始
+        0x0020u,  // R03: 水平表示終了 (32 * 8 = 256 dots)
+        0x0103u,  // R04: 垂直総期間
+        0x0002u,  // R05: 垂直同期終了
+        0x0010u,  // R06: 垂直表示開始
+        0x0100u,  // R07: 垂直表示終了 (256 - 16 = 240 lines)
+        0x0024u,  // R08: 外部同期調整
+    };
+
+    for (uint32_t reg = 0; reg < sizeof(crtc_mode) / sizeof(crtc_mode[0]); ++reg)
+    {
+        poke16(CRTC_REG(reg), crtc_mode[reg]);
+    }
+    poke16(CRTC_REG(20), 0x0000u);
+
+    // CYNTHIA の座標原点を上の CRTC 表示期間へ追従させる。
+    poke16(SPR_H_TOTAL, 0x0025u);
+    poke16(SPR_H_DISP, 0x0004u);
+    poke16(SPR_V_DISP, 0x0010u);
+    poke16(SPR_RES, 0x0000u);
+}
 
 static void set_palette(int stage)
 {
@@ -194,6 +270,7 @@ void video_build_stage(void)
 
 void video_clear_scene(void)
 {
+    set_graphic_mode(GRAPHIC_MODE_INDEXED);
     poke16(VC_DISPLAY, VC_DISPLAY_TEXT | VC_DISPLAY_SPRITE);
     for (int cy = 0; cy < BG_CELLS_Y; ++cy)
     {
@@ -206,30 +283,41 @@ void video_clear_scene(void)
     video_set_scroll(0);
 }
 
-static void show_graphic_bitmap(const uint8_t bitmap[NES_TITLE_BITMAP_ROWS][128])
+static void restore_bitmap_rect(const uint8_t bitmap[NES_TITLE_BITMAP_ROWS][128], int left, int top,
+                                int right, int bottom)
 {
-    shown_eye = -1;
-    shown_fade = -1;
-    shown_selection = -1;
-    // G-VRAMは16色512x512。原作画面を左上の256x240へ原寸で置く。
-    poke16(VC_MODE, 0x0000u);
-    for (int color = 0; color < 16; ++color)
-    {
-        poke16(VC_GRAPHIC_PALETTE + (uint32_t)color * 2u, g_nes_title_palette[color]);
-    }
-    // テキスト面も原作タイトルのパレット0・色1へ合わせる。
-    poke16(VC_TEXT_PALETTE + 2u, g_nes_title_palette[1]);
-    for (int y = 0; y < NES_TITLE_BITMAP_ROWS; ++y)
+    // 2画素を1byteから復元するため、全呼出しの左右端は偶数に揃える。
+    for (int y = top; y < bottom; ++y)
     {
         const uint32_t row = GVRAM + (uint32_t)y * GVRAM_BYTES_PER_LINE;
-        for (int packed_x = 0; packed_x < 128; ++packed_x)
+        for (int packed_x = left / 2; packed_x < right / 2; ++packed_x)
         {
             const uint8_t packed = bitmap[y][packed_x];
             poke16(row + (uint32_t)packed_x * 4u, (uint16_t)(packed >> 4));
             poke16(row + (uint32_t)packed_x * 4u + 2u, (uint16_t)(packed & 0x0Fu));
         }
     }
+}
 
+static void restore_bitmap_overlays(const uint8_t bitmap[NES_TITLE_BITMAP_ROWS][128])
+{
+    const int title_eye_dirty = (bitmap_dirty_mask & BITMAP_DIRTY_TITLE_EYE) != 0;
+    const int round_eye_dirty = (bitmap_dirty_mask & BITMAP_DIRTY_ROUND_EYE) != 0;
+    const int cursor_dirty = (bitmap_dirty_mask & BITMAP_DIRTY_CURSOR) != 0;
+    const int lives_dirty = (bitmap_dirty_mask & BITMAP_DIRTY_LIVES) != 0;
+    if (title_eye_dirty) restore_bitmap_rect(bitmap, 184, 56, 216, 80);
+    if (round_eye_dirty) restore_bitmap_rect(bitmap, 184, 152, 216, 176);
+    if (cursor_dirty)
+    {
+        restore_bitmap_rect(bitmap, 44, 123, 52, 131);
+        restore_bitmap_rect(bitmap, 44, 137, 52, 145);
+        restore_bitmap_rect(bitmap, 44, 151, 52, 159);
+    }
+    if (lives_dirty) restore_bitmap_rect(bitmap, 132, 90, 140, 98);
+}
+
+static void finish_graphic_bitmap(uint16_t display)
+{
     for (int cy = 0; cy < BG_CELLS_Y; ++cy)
     {
         for (int cx = 0; cx < BG_CELLS_X; ++cx)
@@ -239,34 +327,142 @@ static void show_graphic_bitmap(const uint8_t bitmap[NES_TITLE_BITMAP_ROWS][128]
     }
     video_hide_from(0);
     video_set_scroll(0);
-    // テキスト/スプライトをG-VRAMより手前に置き、ページ0だけを表示する。
     poke16(VC_PRIORITY, 0x0104u);
-    poke16(VC_DISPLAY, VC_DISPLAY_TEXT | VC_DISPLAY_SPRITE | VC_DISPLAY_GRAPHIC0);
+    poke16(VC_DISPLAY, display);
+}
+
+static void show_graphic_bitmap(const uint8_t bitmap[NES_TITLE_BITMAP_ROWS][128], int initial_fade)
+{
+    const int mode_changed = set_graphic_mode(GRAPHIC_MODE_INDEXED);
+    const int bitmap_resident = resident_bitmap == bitmap && resident_mode == GRAPHIC_MODE_INDEXED;
+    const int replacing_bitmap = !bitmap_resident && !mode_changed;
+    if (replacing_bitmap) poke16(VC_DISPLAY, 0);
+    invalidate_scene_overlays();
+
+    // fadeへの復帰で一瞬明るい16色画像を見せないよう、表示許可前に設定する。
+    const int has_initial_fade = initial_fade >= 0;
+    const uint16_t *palette =
+        has_initial_fade ? g_nes_title_fades[initial_fade] : g_nes_title_palette;
+    for (int color = 0; color < 16; ++color)
+    {
+        poke16(VC_GRAPHIC_PALETTE + (uint32_t)color * 2u, palette[color]);
+    }
+    // テキスト面も原作タイトルのパレット0・色1へ合わせる。
+    poke16(VC_TEXT_PALETTE + 2u, g_nes_title_palette[1]);
+    // BGで遊んでいる間もG-VRAMは残るので、同じ画像の全面再転送は要らない。
+    if (bitmap_resident)
+    {
+        restore_bitmap_overlays(bitmap);
+    }
+    else
+    {
+        restore_bitmap_rect(bitmap, 0, 0, 256, NES_TITLE_BITMAP_ROWS);
+    }
+    resident_bitmap = bitmap;
+    resident_mode = GRAPHIC_MODE_INDEXED;
+    bitmap_dirty_mask = 0;
+    finish_graphic_bitmap(VC_DISPLAY_TEXT | VC_DISPLAY_SPRITE | VC_DISPLAY_GRAPHIC0);
+}
+
+static void restore_direct_title_rect(int left, int top, int right, int bottom)
+{
+    for (int y = top; y < bottom; ++y)
+    {
+        const uint32_t row = GVRAM + (uint32_t)y * GVRAM_BYTES_PER_LINE;
+        for (int x = left; x < right; ++x)
+        {
+            poke16(row + (uint32_t)x * 2u, g_x68k_title_bitmap[y][x]);
+        }
+    }
+}
+
+static void put_direct_title_logo(int phase)
+{
+    // 全面の再変換はせず、生成時に制限した金色の光沢だけを差し替える。
+    const int count = g_x68k_title_logo_count < TITLE_LOGO_MAX_PIXELS ? g_x68k_title_logo_count
+                                                                      : TITLE_LOGO_MAX_PIXELS;
+    for (int i = 0; i < count; ++i)
+    {
+        const uint16_t position = g_x68k_title_logo_positions[i];
+        const uint32_t row = GVRAM + (uint32_t)(position >> 8) * GVRAM_BYTES_PER_LINE;
+        poke16(row + (uint32_t)(position & 255u) * 2u, g_x68k_title_logo_colors[phase][i]);
+    }
+}
+
+static void restore_direct_title_overlays(void)
+{
+    const int title_eye_dirty = (bitmap_dirty_mask & BITMAP_DIRTY_TITLE_EYE) != 0;
+    const int cursor_dirty = (bitmap_dirty_mask & BITMAP_DIRTY_CURSOR) != 0;
+    const int logo_dirty = (bitmap_dirty_mask & BITMAP_DIRTY_LOGO) != 0;
+    if (title_eye_dirty) restore_direct_title_rect(184, 56, 216, 80);
+    if (cursor_dirty)
+    {
+        restore_direct_title_rect(44, 123, 52, 131);
+        restore_direct_title_rect(44, 137, 52, 145);
+        restore_direct_title_rect(44, 151, 52, 159);
+    }
+    if (logo_dirty) put_direct_title_logo(0);
+}
+
+static void show_direct_title(void)
+{
+    const int mode_changed = set_graphic_mode(GRAPHIC_MODE_DIRECT);
+    const int bitmap_resident =
+        resident_bitmap == g_x68k_title_bitmap && resident_mode == GRAPHIC_MODE_DIRECT;
+    const int replacing_bitmap = !bitmap_resident && !mode_changed;
+    if (replacing_bitmap) poke16(VC_DISPLAY, 0);
+    invalidate_scene_overlays();
+
+    // 呼出しは画像/色数の変更時だけに限定し、通常フレームでは全面転送しない。
+    if (bitmap_resident)
+    {
+        restore_direct_title_overlays();
+    }
+    else
+    {
+        restore_direct_title_rect(0, 0, 256, NES_TITLE_BITMAP_ROWS);
+    }
+    resident_bitmap = g_x68k_title_bitmap;
+    resident_mode = GRAPHIC_MODE_DIRECT;
+    bitmap_dirty_mask = 0;
+    finish_graphic_bitmap(GRAPHIC_DISPLAY_DIRECT);
 }
 
 void video_show_title(void)
 {
-    show_graphic_bitmap(g_nes_title_bitmap);
+    show_graphic_bitmap(g_x68k_title_fallback, -1);
     copy_pattern_to_vram(PAT_TITLE_CURSOR, g_nes_title_cursor_pattern[0]);
 }
 
 void video_show_round(int stage)
 {
     const int safe_stage = (stage >= 0 && stage < 4) ? stage : 0;
-    show_graphic_bitmap(g_nes_round_bitmaps[safe_stage]);
+    show_graphic_bitmap(g_nes_round_bitmaps[safe_stage], -1);
 }
 
 void video_show_ending(void)
 {
-    show_graphic_bitmap(g_nes_ending_bitmap);
+    show_graphic_bitmap(g_nes_ending_bitmap, -1);
     poke16(VC_GRAPHIC_PALETTE + 8u, 0xFFFFu);
 }
 
 void video_animate_scene(int is_title, int frame, int phase, int fade, int exiting, int selection,
                          int lives)
 {
-    const int safe_fade = fade < 8 ? fade : 7;
-    const int palette_changed = safe_fade != shown_fade;
+    const int safe_fade = fade < 0 ? 0 : (fade < 8 ? fade : 7);
+    const int is_fading = safe_fade != 0;
+    const int direct_title = is_title && !is_fading;
+    const int direct_title_missing = direct_title && (resident_bitmap != g_x68k_title_bitmap ||
+                                                      resident_mode != GRAPHIC_MODE_DIRECT ||
+                                                      graphic_mode != GRAPHIC_MODE_DIRECT);
+    const int fallback_title_missing =
+        is_title && is_fading &&
+        (resident_bitmap != g_x68k_title_fallback || resident_mode != GRAPHIC_MODE_INDEXED ||
+         graphic_mode != GRAPHIC_MODE_INDEXED);
+    if (direct_title_missing) show_direct_title();
+    if (fallback_title_missing) show_graphic_bitmap(g_x68k_title_fallback, safe_fade);
+
+    const int palette_changed = !direct_title && safe_fade != shown_fade;
     if (palette_changed)
     {
         for (int color = 0; color < 16; ++color)
@@ -275,7 +471,7 @@ void video_animate_scene(int is_title, int frame, int phase, int fade, int exiti
         if (is_bright) poke16(VC_GRAPHIC_PALETTE + 8u, 0xFFFFu);
         shown_fade = safe_fade;
     }
-    const int eye = fade ? 4 : (exiting ? 3 : (phase == 3 ? 1 : phase));
+    const int eye = is_fading ? 4 : (exiting ? 3 : (phase == 3 ? 1 : phase));
     const int eye_changed = eye != shown_eye;
     if (eye_changed)
     {
@@ -283,16 +479,30 @@ void video_animate_scene(int is_title, int frame, int phase, int fade, int exiti
         for (int y = 0; y < 24; ++y)
             for (int x = 0; x < 32; ++x)
             {
-                const uint8_t packed = eye == 4 ? g_nes_title_bitmap[y + 56][(x + 184) / 2]
-                                                : g_nes_eyes[eye][y][x / 2];
-                const uint16_t color = (x & 1) ? packed & 15u : packed >> 4;
+                uint16_t color;
+                if (direct_title)
+                {
+                    color = g_x68k_title_eyes[eye][y][x];
+                }
+                else
+                {
+                    const int restore_eye = eye == 4;
+                    const uint8_t (*base)[128] =
+                        is_title ? g_x68k_title_fallback : g_nes_title_bitmap;
+                    const uint8_t (*eyes)[24][16] =
+                        is_title ? g_x68k_title_eyes_fallback : g_nes_eyes;
+                    const uint8_t packed =
+                        restore_eye ? base[y + 56][(x + 184) / 2] : eyes[eye][y][x / 2];
+                    color = (x & 1) ? packed & 15u : packed >> 4;
+                }
                 poke16(GVRAM + (uint32_t)(y + 56 + dy) * GVRAM_BYTES_PER_LINE +
                            (uint32_t)(x + 184) * 2u,
                        color);
             }
+        bitmap_dirty_mask |= is_title ? BITMAP_DIRTY_TITLE_EYE : BITMAP_DIRTY_ROUND_EYE;
         shown_eye = eye;
     }
-    const int cursor = fade || exiting ? -1 : selection;
+    const int cursor = is_fading || exiting ? -1 : selection;
     const int cursor_changed = is_title && cursor != shown_selection;
     if (cursor_changed)
     {
@@ -302,24 +512,38 @@ void video_animate_scene(int is_title, int frame, int phase, int fade, int exiti
                 for (int x = 0; x < 8; ++x)
                 {
                     const int sx = 44 + x, sy = ys[option] + y;
-                    const uint8_t packed = g_nes_title_bitmap[sy][sx / 2];
-                    uint16_t color = (sx & 1) ? packed & 15u : packed >> 4;
+                    const uint8_t packed = g_x68k_title_fallback[sy][sx / 2];
+                    uint16_t color = direct_title ? g_x68k_title_bitmap[sy][sx]
+                                                  : ((sx & 1) ? packed & 15u : packed >> 4);
                     const uint8_t glyph = g_nes_title_cursor_pattern[0][y * 4 + x / 2];
                     const int opaque = ((x & 1) ? glyph & 15 : glyph >> 4) != 0;
-                    if (option == cursor && opaque) color = 4;
+                    const int cursor_pixel = option == cursor && opaque;
+                    if (cursor_pixel) color = direct_title ? 0xFFFFu : 4u;
                     poke16(GVRAM + (uint32_t)sy * GVRAM_BYTES_PER_LINE + (uint32_t)sx * 2u, color);
                 }
+        bitmap_dirty_mask |= BITMAP_DIRTY_CURSOR;
         shown_selection = cursor;
     }
-    if (!is_title)
+    const int is_round = !is_title;
+    if (is_round)
     {
         const int digit = lives < 0 ? 0 : (lives > 9 ? 9 : lives);
         for (int y = 0; y < 8; ++y)
             for (int x = 0; x < 8; ++x)
                 poke16(GVRAM + (uint32_t)(90 + y) * GVRAM_BYTES_PER_LINE + (uint32_t)(132 + x) * 2u,
                        (g_nes_digits[digit][y] & (128u >> x)) ? 1 : 0);
+        bitmap_dirty_mask |= BITMAP_DIRTY_LIVES;
     }
-    if (is_title) poke16(VC_GRAPHIC_PALETTE + 18u, g_nes_logo_fades[safe_fade][(frame >> 3) & 7]);
+    const int logo_phase = (frame >> 3) & 7;
+    const int direct_logo_changed = direct_title && logo_phase != shown_logo_phase;
+    if (direct_logo_changed)
+    {
+        put_direct_title_logo(logo_phase);
+        bitmap_dirty_mask |= BITMAP_DIRTY_LOGO;
+        shown_logo_phase = logo_phase;
+    }
+    const int indexed_title = is_title && !direct_title;
+    if (indexed_title) poke16(VC_GRAPHIC_PALETTE + 18u, g_nes_logo_fades[safe_fade][logo_phase]);
 }
 
 void video_put_title_cursor(int selection)
@@ -455,6 +679,7 @@ void video_put_boss(int x, int y, int flashing)
 void video_set_stage(int stage)
 {
     level_set_stage(stage);
+    set_graphic_mode(GRAPHIC_MODE_INDEXED);
     poke16(VC_DISPLAY, VC_DISPLAY_TEXT | VC_DISPLAY_SPRITE);
     set_palette(stage);
     load_background_patterns();
@@ -473,6 +698,9 @@ void video_hide_from(int first_index)
 
 void video_init(void)
 {
+    graphic_mode = GRAPHIC_MODE_UNKNOWN;
+    set_graphic_mode(GRAPHIC_MODE_INDEXED);
+    set_256x240_mode();
     set_palette(0);
     load_background_patterns();
     load_actor_patterns();

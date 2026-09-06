@@ -1191,6 +1191,39 @@ static void test_drums_play(void)
     CHECK(hats > 0);
 }
 
+static void test_title_melody_balance(void)
+{
+    printf("音: タイトル旋律の音量・開始時刻・ゲーム中の旋律停止\n");
+    Sound s;
+    sound_init(&s);
+    s.song = 1;
+    s.fade = 0;
+    int first_note = -1;
+    unsigned note_count = 0;
+    SoundFrame f;
+    for (int frame = 0; frame < 1109; ++frame)
+    {
+        sound_update(&s, &f);
+        const int new_note = f.key_on[VOICE_LEAD];
+        if (!new_note) continue;
+        const int first = first_note < 0;
+        if (first) first_note = frame;
+        ++note_count;
+        CHECK_EQ(f.volume[VOICE_LEAD], 4);
+        CHECK_EQ(f.volume[VOICE_HARMONY], 32);
+        CHECK_EQ(f.key_code[VOICE_LEAD], f.key_code[VOICE_HARMONY]);
+    }
+    CHECK_EQ(first_note, 167);
+    CHECK_EQ(note_count, 44);
+    s.song = 0;
+    for (int frame = 0; frame < 128; ++frame)
+    {
+        sound_update(&s, &f);
+        CHECK_EQ(f.key_on[VOICE_LEAD], 0);
+        CHECK_EQ(f.key_on[VOICE_HARMONY], 0);
+    }
+}
+
 static void test_sfx_priority(void)
 {
     printf("音: 重い効果音は軽い効果音に消されない\n");
@@ -1501,6 +1534,7 @@ int main(void)
     test_sequencer_advances();
     test_stage_tempo();
     test_drums_play();
+    test_title_melody_balance();
     test_sfx_priority();
     test_sfx_uses_own_voice();
     test_game_plays_jump_sfx();

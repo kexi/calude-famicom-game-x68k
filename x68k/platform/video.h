@@ -20,15 +20,18 @@ void video_init(void);
 // 一度書けば、あとはスクロールレジスタを動かすだけで済む。
 void video_build_stage(void);
 
-// タイトル/エンディング用にBGとスプライトを空にする。
+// 16色モードへ戻し、タイトル/エンディング用にBGとスプライトを空にする。
 void video_clear_scene(void);
 
-// 原作の全面タイトル画像を表示する。
+// G-VRAMの左上256x240はvideoが専有し、同じ画像/色数は上書き箇所だけ復元する。
+// 外部からG-VRAMへ書く、または画面モードを変える場合はvideo_initで再初期化する。
+// 新タイトルの16色fallbackを表示し、animate時にfade=0なら高色へ切り替える。
 void video_show_title(void);
 
 // 原作の台詞と顔を使ったラウンド開始画面を表示する。
 void video_show_round(int stage);
 void video_show_ending(void);
+// タイトルは通常GRB16、fade中だけ同じ原画の16色版。ラウンドは常に16色。
 void video_animate_scene(int is_title, int frame, int phase, int fade, int exiting, int selection,
                          int lives);
 

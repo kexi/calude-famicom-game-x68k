@@ -15,13 +15,14 @@
 
 #include "../core/game.h"
 
-// テキスト画面を消す。
+// 初回はテキスト全画面、以後はHUDの描画範囲を消す。
+// 初回以後のTVRAMはこのモジュールが所有し、外部の直接描画を混ぜない。
 void hud_clear(void);
 
 // HUD と状態表示を描く。毎フレーム呼ぶ。
 void hud_draw(const Game *g);
 
-// 自動検証用の 1 行を、画面の下端へ数字だけで出す。
+// 自動検証用の 1 行を、画面の上端へ数字だけで出す。
 //
 // Why DOS _PRINT を使わないか: あれは IOCS のカーソル位置に依存する。
 // HUD がテキスト VRAM を直接書くようになったので、カーソルの位置が
@@ -34,5 +35,10 @@ void hud_draw(const Game *g);
 // 位置で意味を取れる。数字も同じ理由で読めないため、
 // 検証側は「何桁目に何個の点があるか」ではなく別の手段を使う。
 void hud_debug_line(const Game *g);
+
+#ifdef CALUDE_TEST_HUD_RASTER
+// 8x8全体が画面内にある座標だけを、独立した旧pixel描画の基準と比較する。
+void hud_test_nes_char(int x, int y, char c, int color);
+#endif
 
 #endif  // CALUDE_PLATFORM_HUD_H

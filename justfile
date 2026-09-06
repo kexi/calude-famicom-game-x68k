@@ -59,7 +59,7 @@ build-hello:
 #
 # core/ はプラットフォーム非依存、platform/ が X68000 のハードを叩く。
 # アセットは tools/ が生成した .inc.c を混ぜる。
-game_srcs := "x68k/platform/crt0.S x68k/platform/main.c x68k/platform/video.c x68k/platform/input.c x68k/core/level.c x68k/core/player.c x68k/core/enemy.c x68k/core/arrow.c x68k/core/item.c x68k/core/boss.c x68k/core/game.c x68k/core/sound.c x68k/platform/audio.c x68k/platform/hud.c x68k/assets/levels.inc.c x68k/assets/sprites.inc.c"
+game_srcs := "x68k/platform/crt0.S x68k/platform/main.c x68k/platform/video.c x68k/platform/input.c x68k/core/level.c x68k/core/player.c x68k/core/enemy.c x68k/core/arrow.c x68k/core/item.c x68k/core/boss.c x68k/core/game.c x68k/core/sound.c x68k/platform/audio.c x68k/platform/hud.c x68k/assets/levels.inc.c x68k/assets/sprites.inc.c x68k/assets/title_highcolor.inc.c"
 
 [doc('アセット (レベル・フォント) を生成する')]
 assets:
@@ -68,6 +68,7 @@ assets:
       assets/sprites.s assets/chr.s assets/roundtext.s assets/title_screen.s \
       assets/title_chr.s src/state.s x68k/assets/sprites.inc.c
     PYTHONDONTWRITEBYTECODE=1 python3 x68k/tools/mkaudio.py assets/drums.s x68k/assets/drums.inc.h
+    PYTHONDONTWRITEBYTECODE=1 python3 x68k/tools/mkhighcolor.py x68k/assets assets x68k/assets/title_highcolor.inc.c
 
 [doc('ゲーム本体 (GAME.X) をビルドする')]
 build debug="0": assets
@@ -100,6 +101,10 @@ run *ARGS: build
 image X:
     python3 x68k/tools/inject_hdf.py \
       {{ emu }}/rom/hdd0.hdf {{ build }}/disk.hdf --add {{ X }}
+
+# 動作中ディスクを保存したまま、GAME.Xだけ更新した候補を別パスへ作る。
+image-from SOURCE OUT X:
+    python3 x68k/tools/inject_hdf.py {{ SOURCE }} {{ OUT }} --add {{ X }}
 
 # --keys は「実際の改行」を含む文字列を渡す必要がある。
 # just の "..." では \n がエスケープとして解釈されないので、
@@ -167,6 +172,10 @@ render-runner:
 check-shot PPM EXPECT="title":
     python3 x68k/tools/checkppm.py {{ PPM }} --expect {{ EXPECT }} --dump
 
+# 取得済みPPMフレームを、内容を変更せず表示用PNGへ変換する（macOS）。
+preview-shot PPM OUT:
+    sips -s format png '{{ PPM }}' --out '{{ OUT }}'
+
 # 通常版をHuman68kで起動し、macOS標準sipsで256x240のタイトル画面を保存する。
 screenshot-title: build render-runner
     just image {{ build }}/GAME.X
@@ -177,15 +186,48 @@ screenshot-title: build render-runner
     sips -s format png \
       {{ build }}/title-full.ppm --out {{ build }}/title.png
 
+# 元ディスクを保全し、別パスの候補ディスクで通常版タイトルを撮影する。
+screenshot-title-from SOURCE OUT IPL: build render-runner
+    test ! -e '{{ OUT }}.hdf'
+    just image-from '{{ SOURCE }}' '{{ OUT }}.hdf' '{{ build }}/GAME.X'
+    {{ build }}/x68k-render-run --iplrom '{{ IPL }}' \
+      --hdd '{{ OUT }}.hdf' --cycles 390000000 --event-driven \
+      --keys $'game\n' --ppm '{{ OUT }}.ppm' > '{{ OUT }}.log' 2>&1
+    python3 x68k/tools/checkppm.py '{{ OUT }}.ppm' --expect title
+    sips -s format png '{{ OUT }}.ppm' --out '{{ OUT }}.png'
+
 # 実際の描画コードとエミュレータを接続し、各場面の256x240画像を検証する。
 test-video: assets
     mkdir -p {{ build }}/visual
-    for f in x68k/platform/video.c x68k/platform/hud.c x68k/platform/audio.c x68k/core/level.c x68k/assets/levels.inc.c x68k/assets/sprites.inc.c; do \
+    for f in x68k/platform/video.c x68k/platform/hud.c x68k/platform/audio.c x68k/core/level.c x68k/assets/levels.inc.c x68k/assets/sprites.inc.c x68k/assets/title_highcolor.inc.c; do \
       clang -O1 -DCALUDE_HOST_VIDEO -c $f -o {{ build }}/visual/$(basename $f).o || exit 1; \
     done
     clang++ -std=c++17 -O1 -DCALUDE_HOST_VIDEO -I{{ emu }}/src/x68k/core -I{{ emu }}/src/x68k/core/cpu \
       x68k/test/test_video.cpp {{ build }}/visual/*.o {{ emu }}/build-host/libx68k_core.a -o {{ build }}/test-video
     ./{{ build }}/test-video {{ build }}/visual
+
+# NES字形のbyte単位描画を旧pixel基準と比較し、TVRAM全体と読書込回数を検証する。
+test-hud-raster: assets
+    mkdir -p {{ build }}
+    clang -std=c17 -O1 -g -Wall -Wextra -Werror -DCALUDE_HOST_VIDEO -DCALUDE_TEST_HUD_RASTER \
+      x68k/test/test_hud_raster.c x68k/platform/hud.c x68k/assets/sprites.inc.c \
+      -o {{ build }}/test-hud-raster
+    ./{{ build }}/test-hud-raster
+
+# 音源本体も同じclang++でコンパイルし、DarwinのGCC/ClangコンストラクタABI混在を避ける。
+# タイトル曲を実際の音色で合成し、FM/ADPCMの秒別音量と任意のWAVを出す。
+test-audio-balance SECONDS="20" WAV_PREFIX="" TITLE_GAIN="0" LEAD_GAIN_Q8="256" LEAD_PEAK_LIMIT="0":
+    mkdir -p {{ build }}/audio-balance
+    for f in x68k/core/sound.c x68k/platform/audio.c; do \
+      clang -std=c17 -O1 -g -Wall -Wextra -Werror -DCALUDE_HOST_VIDEO \
+        -c $f -o {{ build }}/audio-balance/$(basename $f).o || exit 1; \
+    done
+    clang++ -std=c++17 -O1 -g -Wall -Wextra -Werror -DCALUDE_HOST_VIDEO \
+      -I{{ emu }}/src/x68k/core -I{{ emu }}/src/x68k/core/cpu \
+      x68k/test/test_audio_balance.cpp {{ build }}/audio-balance/*.o \
+      {{ emu }}/src/x68k/core/dev/opm.cpp {{ emu }}/src/x68k/core/dev/adpcm.cpp \
+      -o {{ build }}/test-audio-balance
+    ./{{ build }}/test-audio-balance '{{ SECONDS }}' '{{ WAV_PREFIX }}' '{{ TITLE_GAIN }}' '{{ LEAD_GAIN_Q8 }}' '{{ LEAD_PEAK_LIMIT }}'
 
 # ───── lint / format ───────────────────────────────────────────────────────
 
@@ -197,6 +239,10 @@ test-video: assets
 [doc('C とアセンブラを整形する')]
 fmt:
     fd -e c -e h -e cpp -E '*.inc.c' -E '*.inc.h' . x68k --exec clang-format -i
+
+# 無関係な既存差分を整形せず、指定したファイルだけ整える。
+fmt-files +FILES:
+    clang-format -i {{ FILES }}
 
 [doc('整形されているかを検査する (書き換えない)')]
 fmt-check:

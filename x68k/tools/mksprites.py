@@ -308,6 +308,23 @@ def title_cursor_pattern(title_chr: bytes) -> bytes:
     return bytes(out)
 
 
+def title_platform_label(title: list[bytes], sprite_chr: bytes) -> list[bytes]:
+    """著作権表記の下へ既存8x8字形でX68000版のラベルを置く。"""
+    bitmap = [bytearray(row) for row in title]
+    # テキスト面へ重ねるとタイトルのフェードと別管理になるため、生成時に焼き込む。
+    for index, char in enumerate("X68000"):
+        glyph = decode_tile(sprite_chr, ord(char) + 0x60)
+        for dy, row in enumerate(glyph):
+            for dx, pixel in enumerate(row):
+                is_transparent = pixel == 0
+                if is_transparent:
+                    continue
+                x, y = 52 + index * 8 + dx, 228 + dy
+                shift = 4 if x % 2 == 0 else 0
+                bitmap[y][x // 2] = (bitmap[y][x // 2] & ~(0x0F << shift)) | (1 << shift)
+    return [bytes(row) for row in bitmap]
+
+
 def round_bitmap(sprite_chr: bytes, title: list[bytes], dialog: bytes, stage: int = 0) -> list[bytes]:
     """原作のラウンド画面を256x240・4bppの走査線へ組み立てる。"""
     pixels = [bytearray(256) for _ in range(240)]
@@ -501,7 +518,7 @@ def main() -> int:
         background,
         mountain_map,
         game_palettes(),
-        title,
+        title_platform_label(title, sprite_chr),
         rounds,
         cursor,
         title_palette,
