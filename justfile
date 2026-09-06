@@ -73,11 +73,11 @@ assets:
     PYTHONDONTWRITEBYTECODE=1 python3 x68k/tools/mkforeground.py x68k/assets x68k/assets/foreground_highcolor.inc.c
 
 [doc('ゲーム本体 (GAME.X) をビルドする')]
-build debug="0": assets
+build debug="0" extra="": assets
     mkdir -p {{ build }}
     for f in {{ game_srcs }}; do \
       o={{ build }}/$(basename $f | tr '.' '_').o; \
-      {{ cross }}-gcc {{ cflags }} -DCALUDE_DEBUG_HUD={{ debug }} -c $f -o $o || exit 1; \
+      {{ cross }}-gcc {{ cflags }} {{ extra }} -DCALUDE_DEBUG_HUD={{ debug }} -c $f -o $o || exit 1; \
     done
     {{ cross }}-ld --emit-relocs -n -T x68k/ld/game.ld \
       -o {{ build }}/game.elf {{ build }}/*_S.o {{ build }}/*_c.o \

@@ -367,7 +367,12 @@ void hc_present(void)
         const int right = dirty_right[y];
         const int clean = left >= right;
         if (clean) continue;
+#ifdef CALUDE_BENCH_NO_BACKGROUND
+        // 計測用: 遠景の読み出しを外し、背景合成の費用だけを切り分ける。
+        for (int x = left; x < right; ++x) scratch[x] = 0;
+#else
         for (int x = left; x < right; ++x) scratch[x] = scene_background[y][x];
+#endif
         compose_glyphs(y, left, right);
         compose_terrain(y, left, right);
         compose_sprites(y, left, right);
