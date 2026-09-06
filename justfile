@@ -59,7 +59,7 @@ build-hello:
 #
 # core/ はプラットフォーム非依存、platform/ が X68000 のハードを叩く。
 # アセットは tools/ が生成した .inc.c を混ぜる。
-game_srcs := "x68k/platform/crt0.S x68k/platform/main.c x68k/platform/video.c x68k/platform/input.c x68k/core/level.c x68k/core/player.c x68k/core/enemy.c x68k/core/arrow.c x68k/core/item.c x68k/core/boss.c x68k/core/game.c x68k/core/sound.c x68k/platform/audio.c x68k/platform/hud.c x68k/assets/levels.inc.c x68k/assets/sprites.inc.c x68k/assets/title_highcolor.inc.c x68k/assets/stage_highcolor.inc.c"
+game_srcs := "x68k/platform/crt0.S x68k/platform/main.c x68k/platform/video.c x68k/platform/highcolor_renderer.c x68k/platform/input.c x68k/core/level.c x68k/core/player.c x68k/core/enemy.c x68k/core/arrow.c x68k/core/item.c x68k/core/boss.c x68k/core/game.c x68k/core/sound.c x68k/platform/audio.c x68k/platform/hud.c x68k/assets/levels.inc.c x68k/assets/sprites.inc.c x68k/assets/title_highcolor.inc.c x68k/assets/stage_highcolor.inc.c x68k/assets/foreground_highcolor.inc.c"
 
 [doc('アセット (レベル・フォント) を生成する')]
 assets:
@@ -70,6 +70,7 @@ assets:
     PYTHONDONTWRITEBYTECODE=1 python3 x68k/tools/mkaudio.py assets/drums.s x68k/assets/drums.inc.h
     PYTHONDONTWRITEBYTECODE=1 python3 x68k/tools/mkhighcolor.py x68k/assets assets x68k/assets/title_highcolor.inc.c
     PYTHONDONTWRITEBYTECODE=1 python3 x68k/tools/mkstagehighcolor.py x68k/assets/stage-highcolor-atlas.png x68k/assets/stage_highcolor.inc.c
+    PYTHONDONTWRITEBYTECODE=1 python3 x68k/tools/mkforeground.py x68k/assets x68k/assets/foreground_highcolor.inc.c
 
 [doc('ゲーム本体 (GAME.X) をビルドする')]
 build debug="0": assets
@@ -244,12 +245,40 @@ screenshot-input-disk DISK OUT IPL SCRIPT CYCLES="560000000": (render-runner "32
 # 実際の描画コードとエミュレータを接続し、各場面の256/320x240画像を検証する。
 test-video: assets
     mkdir -p {{ build }}/visual
-    for f in x68k/platform/video.c x68k/platform/hud.c x68k/platform/audio.c x68k/core/level.c x68k/assets/levels.inc.c x68k/assets/sprites.inc.c x68k/assets/title_highcolor.inc.c x68k/assets/stage_highcolor.inc.c; do \
+    for f in x68k/platform/video.c x68k/platform/highcolor_renderer.c x68k/platform/hud.c x68k/platform/audio.c x68k/core/level.c x68k/assets/levels.inc.c x68k/assets/sprites.inc.c x68k/assets/title_highcolor.inc.c x68k/assets/stage_highcolor.inc.c x68k/assets/foreground_highcolor.inc.c; do \
       clang -O1 -DCALUDE_HOST_VIDEO -c $f -o {{ build }}/visual/$(basename $f).o || exit 1; \
     done
     clang++ -std=c++17 -O1 -DCALUDE_HOST_VIDEO -I{{ emu }}/src/x68k/core -I{{ emu }}/src/x68k/core/cpu \
       x68k/test/test_video.cpp {{ build }}/visual/*.o {{ emu }}/build-host/libx68k_core.a -o {{ build }}/test-video
     ./{{ build }}/test-video {{ build }}/visual
+
+# GRB16前景の差分合成を独立参照画像と比較する（ROM/エミュレータ不要）。
+test-highcolor-renderer:
+    mkdir -p {{ build }}/highcolor-test
+    clang -std=c17 -O2 -Wall -Wextra -Werror -DCALUDE_HOST_VIDEO -c \
+      x68k/platform/highcolor_renderer.c -o {{ build }}/highcolor-test/renderer.o
+    clang++ -std=c++17 -O2 -Wall -Wextra -Werror -DCALUDE_HOST_VIDEO \
+      x68k/test/test_highcolor_renderer.cpp {{ build }}/highcolor-test/renderer.o \
+      -o {{ build }}/test-highcolor-renderer
+    ./{{ build }}/test-highcolor-renderer
+
+# 実際の68000命令で高色前景の区間別cycles/VRAM転写数を測定する（ROM不要）。
+bench-highcolor:
+    python3 x68k/tools/bench_highcolor.py {{ emu }} {{ build }}/highcolor-bench
+
+# 標準GVRAMリング試作の全画素と所有範囲を独立した参照画像で検証する。
+test-highcolor-ring:
+    mkdir -p {{ build }}/highcolor-ring-test
+    clang -std=c17 -O2 -Wall -Wextra -Werror -DCALUDE_HOST_VIDEO -c \
+      x68k/platform/highcolor_ring.c -o {{ build }}/highcolor-ring-test/renderer.o
+    clang++ -std=c++17 -O2 -Wall -Wextra -Werror -DCALUDE_HOST_VIDEO \
+      x68k/test/test_highcolor_ring.cpp {{ build }}/highcolor-ring-test/renderer.o \
+      -o {{ build }}/test-highcolor-ring
+    ./{{ build }}/test-highcolor-ring
+
+# リング試作のguest命令時間を、標準256幅とCoreS3の320幅を分けて測定する。
+bench-highcolor-ring WIDTH="256":
+    python3 x68k/tools/bench_highcolor.py {{ emu }} {{ build }}/highcolor-ring-bench --ring --width '{{ WIDTH }}'
 
 # NES字形のbyte単位描画を旧pixel基準と比較し、TVRAM全体と読書込回数を検証する。
 test-hud-raster: assets

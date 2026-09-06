@@ -20,6 +20,12 @@ extern "C"
 #include "../platform/hud.h"
 #include "../platform/hw.h"
 #include "../platform/video.h"
+    extern const uint16_t g_highcolor_actor_patterns[45][256];
+    extern const uint16_t g_highcolor_background_patterns[9][256];
+    extern const uint16_t g_x68k_title_eyes[4][24][32];
+    extern const uint16_t g_x68k_title_logo_colors[8][512];
+    extern const uint8_t g_nes_digits[10][8];
+    extern const uint16_t g_nes_title_palette[16];
     extern const uint8_t g_x68k_title_fallback[240][128];
     extern const uint16_t g_x68k_title_bitmap[240][256];
     extern const uint16_t g_x68k_title_right[240][64];
@@ -57,7 +63,13 @@ extern "C" void poke16(uint32_t a, uint16_t v)
     const bool is_title_right = is_graphic && graphic_offset / GVRAM_BYTES_PER_LINE < 240 &&
                                 graphic_x >= 256 && graphic_x < 320;
     if (is_text) ++text_word_writes;
-    if (is_graphic) ++graphic_word_writes;
+    if (is_graphic)
+    {
+        const auto access_mode = machine.crtc().read(20) & 0x0300u;
+        const auto display_mode = (machine.bus().read16(VC_MODE) & 3u) << 8;
+        assert(access_mode == display_mode);
+        ++graphic_word_writes;
+    }
     if (is_title_right) ++graphic_right_word_writes;
     machine.bus().write16(a, v);
 }
@@ -72,10 +84,11 @@ extern "C" uint8_t peek8(uint32_t a) { return machine.bus().read8(a); }
 
 static std::vector<uint16_t> capture(const std::string &path)
 {
+    video_present();
     // 透明画素の背景はCompositorと同じ黒。palette0のI bitを背景へ混入させない。
     std::vector<uint16_t> pixels(256 * 240, 0);
     x68k::GraphicRaster::render(graphics.data(), machine.video(), 0, 0, 256, 240, pixels.data(),
-                                256);
+                                256, &machine.crtc());
     x68k::SpriteRaster::renderPlane(machine.sprite(), machine.video(), 0, 0, 256, 240,
                                     pixels.data(), 256);
     for (unsigned y = 0; y < 240; ++y)
@@ -101,9 +114,10 @@ static std::vector<uint16_t> capture(const std::string &path)
 
 static std::vector<uint16_t> capture_lcd(const std::string &path)
 {
+    video_present();
     std::vector<uint16_t> pixels(kTitlePixels);
     x68k::Compositor::render(graphics.data(), text_ram.data(), &machine.sprite(), machine.video(),
-                             0, 0, 320, 240, pixels.data(), 320);
+                             0, 0, 320, 240, pixels.data(), 320, &machine.crtc());
     FILE *file = std::fopen(path.c_str(), "wb");
     assert(file);
     std::fprintf(file, "P6\n320 240\n255\n");
@@ -137,16 +151,85 @@ static void assert_title_right_clear()
             assert(peek16(GVRAM + y * GVRAM_BYTES_PER_LINE + x * 2) == 0);
 }
 
-static void assert_stage_background(int stage)
+static void assert_stage_background(int stage);
+
+// 4bitのハード反転が、パレットブロックを汚さずに実際の画素を鏡像化することを保証する。
+//
+// 実機 (MAME) は属性ワードの bit14/bit15 を反転、bit8-11 をパレットとして読む。
+// bit8 を反転に流用すると、実機では反転されずパレット番号だけが 1 に変わる。
+static void test_sprite_flip_attribute_bits()
 {
-    assert(machine.video().graphicColorMode() ==
-           x68k::VideoController::GraphicColorMode::k65536Color);
-    assert(machine.video().displayControl() == 0x007Fu);
-    assert(machine.video().priority() == 0x0104u);
-    for (unsigned y = 0; y < 240; ++y)
-        for (unsigned x = 0; x < 320; ++x)
-            assert(peek16(GVRAM + y * GVRAM_BYTES_PER_LINE + x * 2) ==
-                   g_x68k_stage_backgrounds[stage][y][x]);
+    video_set_visual_mode(VIDEO_VISUAL_16);
+    video_init();
+
+    // facing=0 と facing=1 の同じ姿勢を、CYNTHIA の実装で描き分けさせる。
+    constexpr int kX = 64, kY = 96;
+    auto render_player = [&](int facing)
+    {
+        video_hide_from(0);
+        video_put_player(kX, kY, facing, 0);
+        std::vector<uint16_t> pixels(256 * 240, 0);
+        x68k::SpriteRaster::renderPlane(machine.sprite(), machine.video(), 0, 0, 256, 240,
+                                        pixels.data(), 256);
+        return pixels;
+    };
+    const auto plain = render_player(0);
+    const auto flipped = render_player(1);
+
+    // 反転が効いていれば、主人公の帯は左右が入れ替わる。
+    // 属性ワードの取り違えは「まったく同じ絵」か「消える」として現れる。
+    bool any_ink = false, mirrored = true;
+    for (int y = kY; y < kY + 32; ++y)
+        for (int dx = 0; dx < 16; ++dx)
+        {
+            const uint16_t a = plain[y * 256 + kX + dx];
+            const uint16_t b = flipped[y * 256 + kX + 15 - dx];
+            if (a) any_ink = true;
+            if (a != b) mirrored = false;
+        }
+    assert(any_ink && "4bitスプライトが描かれていない");
+    assert(mirrored && "hflipが鏡像になっていない (属性ワードのbit割り当てを疑う)");
+
+    // パレットブロックへ漏らしていないこと。bit8-11 は 0 のままでなければならない。
+    const uint16_t attr = machine.bus().read16(SPR_REG_BASE + 4);
+    assert((attr & 0x0F00u) == 0 && "反転bitがパレットブロックを汚している");
+    assert((attr & SPR_ATTR_HFLIP) != 0);
+
+    video_hide_from(0);
+    std::printf("スプライト属性検証成功: hflip鏡像・パレットブロック非汚染\n");
+}
+
+static void test_graphic_access_modes()
+{
+    // 起動元のbuffer/access設定と表示位置にかかわらず、初期化は同じ状態にする。
+    poke16(CRTC_REG(20), 0x0b15u);
+    for (unsigned reg = 12; reg < 20; ++reg) poke16(CRTC_REG(reg), 511u);
+    video_set_visual_mode(VIDEO_VISUAL_16);
+    video_init();
+    assert(peek16(CRTC_REG(20)) == 0);
+    for (unsigned reg = 12; reg < 20; ++reg) assert(peek16(CRTC_REG(reg)) == 0);
+
+    // 色数だけの切替は解像度・クロックbitsを保持し、上位12bitもVRAMに届く。
+    constexpr uint16_t timing_bits = 0x0015u;
+    poke16(CRTC_REG(20), timing_bits);
+    video_show_title();
+    assert(peek16(CRTC_REG(20)) == timing_bits);
+    video_set_visual_mode(VIDEO_VISUAL_65536);
+    video_show_title();
+    assert(peek16(CRTC_REG(20)) == (timing_bits | 0x0300u));
+    assert_title_right(true);
+    video_show_round(0);
+    assert(peek16(CRTC_REG(20)) == (timing_bits | 0x0300u));
+    video_set_stage(0);
+    assert(peek16(CRTC_REG(20)) == (timing_bits | 0x0300u));
+    video_show_ending();
+    assert(peek16(CRTC_REG(20)) == (timing_bits | 0x0300u));
+    video_set_visual_mode(VIDEO_VISUAL_16);
+    video_show_title();
+    assert(peek16(CRTC_REG(20)) == timing_bits);
+    assert_title_right_clear();
+    video_init();
+    std::printf("GVRAM検証成功: R20/VC色数切替・timing保持・起動時scroll初期化\n");
 }
 
 static void assert_outside_title_unchanged(const std::vector<uint8_t> &before)
@@ -457,555 +540,539 @@ static void assert_bitmap_video_state(const BitmapVideoState &expected)
     assert(actual.registers == expected.registers);
 }
 
-// -1=title、0..3=round、4=ending。無効なstageはvideo_show_roundへ直接渡す。
-static void show_bitmap_scene(int scene, unsigned expected_writes)
+// 各期待像は描画器のshadow/cacheを参照せず、素材と公開scene契約から組み立てる。
+static std::array<std::array<unsigned, 64 * 15>, 4> stage_cells;
+static bool stage_cells_ready = false;
+
+static uint16_t expected_fade(uint16_t word, int fade)
 {
-    graphic_word_writes = 0;
-    const bool is_title = scene == -1;
-    const bool is_ending = scene == 4;
-    if (is_title)
-        video_show_title();
-    else if (is_ending)
-        video_show_ending();
-    else
-        video_show_round(scene);
-    assert(graphic_word_writes == expected_writes);
+    fade = std::clamp(fade, 0, 7);
+    if (fade == 0) return word;
+    if (fade == 7) return 0;
+    const unsigned scale = 8 - fade;
+    const unsigned g = ((word / 2048) * 2 + word % 2) * scale / 8;
+    const unsigned r = (word / 64 % 32) * scale / 8;
+    const unsigned b = (word / 2 % 32) * scale / 8;
+    return static_cast<uint16_t>((g / 2) * 2048 + r * 64 + b * 2 + g % 2);
 }
 
-static void force_full_bitmap_scene(int scene)
+static uint16_t expected_gold(unsigned x, unsigned y)
 {
-    const bool is_ending = scene == 4;
-    if (is_ending)
-        video_show_round(0);
-    else
-        video_show_ending();
-    show_bitmap_scene(scene, kTitlePixels);
+    const unsigned r = 31 - y % 8, g = 63 - 3 * (y % 8) - x % 4;
+    const unsigned b = 23 - 2 * (y % 8) + x % 4;
+    return static_cast<uint16_t>((g / 2) * 2048 + r * 64 + b * 2 + g % 2);
 }
 
 static uint16_t expected_round_pixel(int stage, unsigned x, unsigned y)
 {
-    const bool inside_bitmap = x < 256;
-    const auto packed = inside_bitmap ? g_nes_round_bitmaps[stage][y][x / 2] : 0;
-    const unsigned index = (x & 1) ? packed & 15 : packed >> 4;
-    const bool in_card = x >= 160 && x < 256 && y >= 128 && y < 232;
-    const bool opaque = index != 0 || in_card;
-    if (opaque) return index == 0 ? 0 : (index == 4 ? 0xffffu : g_nes_title_fades[0][index]);
-    return g_x68k_stage_backgrounds[stage][y][x];
+    const auto background = g_x68k_stage_backgrounds[stage][y][x];
+    const bool card = x >= 160 && x < 256 && y >= 128 && y < 232;
+    if (card) return g_x68k_title_bitmap[y - 96][x];
+    const bool icon = x >= 108 && x < 116 && y >= 89 && y < 97;
+    if (icon)
+    {
+        const auto pixel = g_highcolor_actor_patterns[43][(y - 89) * 16 + x - 108];
+        return pixel != 0 ? pixel : background;
+    }
+    if (x >= 256) return background;
+    const auto packed = g_nes_round_bitmaps[stage][y][x / 2];
+    const auto index = x % 2 ? packed % 16 : packed / 16;
+    return index != 0 ? expected_gold(x, y) : background;
 }
 
-static void assert_source_bitmap(int scene)
+static std::vector<uint16_t> expected_scene(int scene, bool direct, int fade = 0,
+                                            bool animate = false, int phase = 0, int frame = 0,
+                                            int exiting = 0, int selection = -1, int lives = 3)
 {
-    const bool direct_round =
-        scene >= 0 && scene < 4 &&
-        machine.video().graphicColorMode() == x68k::VideoController::GraphicColorMode::k65536Color;
-    if (direct_round)
-    {
-        for (unsigned y = 0; y < 240; ++y)
-            for (unsigned x = 0; x < 320; ++x)
-                assert(peek16(GVRAM + y * GVRAM_BYTES_PER_LINE + x * 2) ==
-                       expected_round_pixel(scene, x, y));
-        return;
-    }
-    const uint8_t (*bitmap)[128] = scene == -1  ? g_x68k_title_fallback
-                                   : scene == 4 ? g_nes_ending_bitmap
-                                                : g_nes_round_bitmaps[scene];
-    for (unsigned y = 0; y < 240; ++y)
-        for (unsigned x = 0; x < 256; ++x)
-        {
-            const auto packed = bitmap[y][x / 2];
-            const auto expected = (x & 1) ? packed & 15 : packed >> 4;
-            assert(peek16(GVRAM + y * GVRAM_BYTES_PER_LINE + x * 2) == expected);
-        }
-}
-
-static void test_bitmap_cache()
-{
-    // 初回と画像変更時は全画素、同一画像の未変更再表示は0回だけG-VRAMへ書く。
-    video_init();
-    show_bitmap_scene(-1, kTitlePixels);
-    for (int scene = -1; scene <= 4; ++scene)
-    {
-        force_full_bitmap_scene(scene);
-        assert_source_bitmap(scene);
-        const auto initial = bitmap_video_state();
-        show_bitmap_scene(scene, 0);
-        assert_bitmap_video_state(initial);
-    }
-
-    // stageでG-VRAMを使うためroundへは全面復元し、その後の目/残機だけ832回で更新する。
-    for (int stage = 0; stage < 4; ++stage)
-        for (int phase = 0; phase < 4; ++phase)
-        {
-            const int fade = phase == 3 ? 7 : 0;
-            const int exiting = phase == 2;
-            force_full_bitmap_scene(stage);
-            video_animate_scene(0, 24, phase, fade, exiting, 0, phase * 3);
-            video_set_stage(stage);
-            video_put_player(10, 40, 0, VIDEO_POSE_STAND);
-            video_set_scroll(144);
-            show_bitmap_scene(stage, kTitlePixels);
-            assert_source_bitmap(stage);
-            const auto restored = bitmap_video_state();
-            graphic_word_writes = 0;
-            video_animate_scene(0, 24, phase, fade, exiting, 0, phase * 3);
-            assert(graphic_word_writes == (fade == 0 ? 832u : kTitlePixels + 832u));
-            const auto animated = bitmap_video_state();
-            force_full_bitmap_scene(stage);
-            assert_bitmap_video_state(restored);
-            video_animate_scene(0, 24, phase, fade, exiting, 0, phase * 3);
-            assert_bitmap_video_state(animated);
-        }
-
-    // 直接色から16色へ戻る全4選択で、全面復元後のanimationも同じ状態になる。
-    for (int selection = 0; selection < 4; ++selection)
-    {
-        force_full_bitmap_scene(-1);
-        video_animate_scene(1, 24, 2, 0, 0, selection, 3);
-        video_clear_scene();
-        video_put_title_cursor(selection);
-        show_bitmap_scene(-1, kTitlePixels);
-        assert_source_bitmap(-1);
-        const auto restored = bitmap_video_state();
-        graphic_word_writes = 0;
-        video_animate_scene(1, 24, 2, 0, 0, selection, 3);
-        assert(graphic_word_writes == kTitlePixels + 1024 + g_x68k_title_logo_count);
-        const auto animated = bitmap_video_state();
-        force_full_bitmap_scene(-1);
-        assert_bitmap_video_state(restored);
-        video_animate_scene(1, 24, 2, 0, 0, selection, 3);
-        assert_bitmap_video_state(animated);
-    }
-
-    // title/全round/endingの全36遷移で、新画像は全面、同画像はdirty分だけを復元する。
-    for (int from = -1; from <= 4; ++from)
-        for (int to = -1; to <= 4; ++to)
-        {
-            force_full_bitmap_scene(from);
-            const bool has_animation = from != 4;
-            if (has_animation) video_animate_scene(from == -1, 8, 1, 0, 0, 1, 6);
-            const unsigned dirty_writes = from == -1 ? kTitlePixels : (from == 4 ? 0 : 832);
-            const unsigned replacement_writes = kTitlePixels;
-            show_bitmap_scene(to, from == to ? dirty_writes : replacement_writes);
-            assert_source_bitmap(to);
-            const auto restored = bitmap_video_state();
-            force_full_bitmap_scene(to);
-            assert_bitmap_video_state(restored);
-        }
-
-    // 後続の目だけの更新で、以前のcursor dirtyを失わない。
-    force_full_bitmap_scene(-1);
-    video_animate_scene(1, 0, 1, 0, 0, 2, 3);
-    video_animate_scene(1, 8, 2, 0, 0, 2, 3);
-    show_bitmap_scene(-1, kTitlePixels);
-    assert_source_bitmap(-1);
-
-    // 無効stageはstage0と同じ常駐画像として扱う。
-    force_full_bitmap_scene(0);
-    for (int stage : {-1, 4, 100})
-    {
-        graphic_word_writes = 0;
-        video_show_round(stage);
-        assert(graphic_word_writes == 0);
-        assert_source_bitmap(0);
-    }
-
-    // 同じ目・カーソル・logo相の直接色animationはG-VRAMへ書かない。
-    force_full_bitmap_scene(-1);
-    video_animate_scene(1, 0, 1, 0, 0, 0, 3);
-    graphic_word_writes = 0;
-    video_animate_scene(1, 1, 1, 0, 0, 0, 3);
-    assert(graphic_word_writes == 0);
-    show_bitmap_scene(-1, kTitlePixels);
-    show_bitmap_scene(-1, 0);
-
-    // fixtureによる外部上書きは所有契約外。dirty以外の画素と別pageの保持だけを検査する。
-    for (int scene : {0})
-    {
-        force_full_bitmap_scene(scene);
-        const bool is_title = scene == -1;
-        video_animate_scene(is_title, 8, 1, 0, 0, 2, 8);
-        std::fill(graphics.begin(), graphics.end(), 0xa5);
-        show_bitmap_scene(scene, is_title ? 1024 : 832);
-        for (size_t offset = 0; offset < graphics.size(); ++offset)
-        {
-            const auto x = (offset % GVRAM_BYTES_PER_LINE) / 2;
-            const auto y = offset / GVRAM_BYTES_PER_LINE;
-            const bool in_eye =
-                x >= 184 && x < 216 && (is_title ? y >= 56 && y < 80 : y >= 152 && y < 176);
-            const bool in_cursor = is_title && x >= 12 && x < 20 &&
-                                   ((y >= 123 && y < 131) || (y >= 137 && y < 145) ||
-                                    (y >= 151 && y < 159) || (y >= 165 && y < 173));
-            const bool in_lives = !is_title && x >= 132 && x < 140 && y >= 90 && y < 98;
-            const bool is_dirty_byte = in_eye || in_cursor || in_lives;
-            uint8_t expected = 0xa5;
-            if (is_dirty_byte)
-            {
-                const auto color = expected_round_pixel(scene, x, y);
-                expected = (offset & 1) ? color & 0xff : color >> 8;
-            }
-            assert(graphics[offset] == expected);
-        }
-        // 次のcaseへはfixtureの直接上書きを持ち越さない。
-        video_init();
-        std::fill(graphics.begin(), graphics.end(), 0);
-    }
-
-    // 初期化後は同じ画像でも全面を再転送する。
-    show_bitmap_scene(-1, kTitlePixels);
-    video_init();
-    show_bitmap_scene(-1, kTitlePixels);
-    assert_source_bitmap(-1);
-    std::printf(
-        "bitmap cache検証成功: title初回76800・同値0・round差分832・stage復帰全面・全36遷移\n");
-}
-
-static void test_title_right_lifecycle()
-{
-    // 外部変更後のinitは右の可視laneだけを強制消去し、左256と範囲外を保つ。
-    std::fill(graphics.begin(), graphics.end(), 0xa5);
-    graphic_word_writes = graphic_right_word_writes = 0;
-    video_init();
-    assert(graphic_word_writes == kTitleRightPixels);
-    assert(graphic_right_word_writes == kTitleRightPixels);
-    assert_title_right_clear();
-    for (size_t offset = 0; offset < graphics.size(); ++offset)
-    {
-        const auto x = (offset % GVRAM_BYTES_PER_LINE) / 2;
-        const auto y = offset / GVRAM_BYTES_PER_LINE;
-        const bool cleared_nibble = y < 240 && x >= 256 && x < 320 && (offset & 1);
-        assert(graphics[offset] == (cleared_nibble ? 0xa0 : 0xa5));
-    }
-    const auto before_title = graphics;
-    graphic_right_word_writes = 0;
-    show_bitmap_scene(-1, kTitlePixels);
-    assert(graphic_right_word_writes == kTitleRightPixels);
-    assert_source_bitmap(-1);
-    assert_title_right(false);
-    assert_outside_title_unchanged(before_title);
-    graphic_right_word_writes = 0;
-    show_bitmap_scene(-1, 0);
-    assert(graphic_right_word_writes == 0);
-
-    // direct/fallbackの切替は右も一度だけ転写し、同じmode内の更新は右を触らない。
-    for (int cycle = 0; cycle < 3; ++cycle)
-    {
-        graphic_right_word_writes = 0;
-        video_animate_scene(1, 0, 0, 0, 0, -1, 3);
-        assert(graphic_right_word_writes == kTitleRightPixels);
-        assert_title_right(true);
-        assert_outside_title_unchanged(before_title);
-        for (int step = 0; step < 8; ++step)
-        {
-            graphic_right_word_writes = 0;
-            video_animate_scene(1, step * 8, step % 3, 0, 0, step % 3, 3);
-            assert(graphic_right_word_writes == 0);
-            assert_title_right(true);
-            assert_outside_title_unchanged(before_title);
-        }
-        for (int fade = 1; fade <= 7; ++fade)
-        {
-            graphic_right_word_writes = 0;
-            video_animate_scene(1, fade * 8, 0, fade, 1, -1, 3);
-            assert(graphic_right_word_writes == (fade == 1 ? kTitleRightPixels : 0));
-            assert_title_right(false);
-            assert_source_bitmap(-1);
-            assert_outside_title_unchanged(before_title);
-        }
-    }
-
-    // 両色数から全round/ending/stage/clear/initへ退出しても右の残像を持ち越さない。
-    for (bool direct : {false, true})
-        for (int exit = 0; exit < 8; ++exit)
-        {
-            video_init();
-            video_show_title();
-            if (direct) video_animate_scene(1, 0, 0, 0, 0, -1, 3);
-            const auto before_exit = graphics;
-            const auto leave_title = [exit]()
-            {
-                const bool is_round = exit < 4;
-                const bool is_ending = exit == 4;
-                const bool is_stage = exit == 5;
-                const bool is_clear = exit == 6;
-                if (is_round)
-                    video_show_round(exit);
-                else if (is_ending)
-                    video_show_ending();
-                else if (is_stage)
-                    video_set_stage(0);
-                else if (is_clear)
-                    video_clear_scene();
-                else
-                    video_init();
-            };
-            graphic_right_word_writes = 0;
-            leave_title();
-            assert(graphic_right_word_writes == kTitleRightPixels);
-            const bool is_stage = exit == 5;
-            const bool is_round = exit < 4;
-            if (is_stage)
-                assert_stage_background(0);
-            else if (is_round)
-                assert_source_bitmap(exit);
-            else
-                assert_title_right_clear();
-            assert_outside_title_unchanged(before_exit);
-            graphic_right_word_writes = 0;
-            leave_title();
-            const bool is_init = exit == 7;
-            assert(graphic_right_word_writes == (is_init ? kTitleRightPixels : 0));
-            if (is_stage)
-                assert_stage_background(0);
-            else if (is_round)
-                assert_source_bitmap(exit);
-            else
-                assert_title_right_clear();
-
-            // clearだけはindexed左画像を保持する。stageは同じdirect modeでも別画像になる。
-            const bool keeps_left_title = !direct && exit == 6;
-            graphic_right_word_writes = 0;
-            show_bitmap_scene(-1, keeps_left_title ? kTitleRightPixels : kTitlePixels);
-            assert(graphic_right_word_writes == kTitleRightPixels);
-            assert_source_bitmap(-1);
-            assert_title_right(false);
-            assert_outside_title_unchanged(before_exit);
-        }
-    // fixture自身のsentinelを後続の画像検証へ持ち越さない。
-    video_init();
-    std::fill(graphics.begin(), graphics.end(), 0);
-    std::printf("タイトル右64px検証成功: 全15360画素・範囲外保持・色数切替・全退出と再入場\n");
-}
-
-static void test_highcolor_title(const std::string &root)
-{
-    hud_clear();
-    video_init();
-    video_show_title();
-    video_animate_scene(1, 0, 0, 0, 0, -1, 3);
-    assert(machine.video().graphicColorMode() ==
-           x68k::VideoController::GraphicColorMode::k65536Color);
-    assert(peek16(VC_DISPLAY) == 0x007Fu);
-    for (unsigned y = 0; y < 240; ++y)
-        for (unsigned x = 0; x < 256; ++x)
-            assert(peek16(GVRAM + y * GVRAM_BYTES_PER_LINE + x * 2) == g_x68k_title_bitmap[y][x]);
-    const auto opened = capture(root + "/highcolor-open.ppm");
-    assert(std::set<uint16_t>(opened.begin(), opened.end()).size() > 256);
-    assert_title_right(true);
-    const auto wide_opened = capture_lcd(root + "/highcolor-wide.ppm");
-    std::set<uint16_t> right_colors;
+    std::vector<uint16_t> words(kTitlePixels);
+    const bool title = scene == -1, ending = scene == 4;
+    const uint8_t (*indexed)[128] = title    ? g_nes_title_bitmap
+                                    : ending ? g_nes_ending_bitmap
+                                             : g_nes_round_bitmaps[scene];
     for (unsigned y = 0; y < 240; ++y)
         for (unsigned x = 0; x < 320; ++x)
         {
-            const bool original_area = x < 256;
-            const auto expected =
-                original_area ? opened[y * 256 + x]
-                              : x68k::VideoController::toRgb565(g_x68k_title_right[y][x - 256]);
-            const bool mismatched = wide_opened[y * 320 + x] != expected;
-            if (mismatched)
-                std::fprintf(
-                    stderr,
-                    "{\"event\":\"wide-title-mismatch\",\"x\":%u,\"y\":%u,"
-                    "\"expected\":%u,\"actual\":%u,\"gvram_word\":%u,"
-                    "\"text_index\":%u,\"text_palette_zero\":%u,\"priority\":%u}\n",
-                    x, y, static_cast<unsigned>(expected),
-                    static_cast<unsigned>(wide_opened[y * 320 + x]),
-                    static_cast<unsigned>(peek16(GVRAM + y * GVRAM_BYTES_PER_LINE + x * 2)),
-                    static_cast<unsigned>(x68k::TextRaster::pixelIndex(text_ram.data(), x, y)),
-                    static_cast<unsigned>(machine.video().textPalette(0)),
-                    static_cast<unsigned>(machine.video().priority()));
-            assert(wide_opened[y * 320 + x] == expected);
-            if (!original_area) right_colors.insert(expected);
-        }
-    assert(right_colors.size() > 256);
-
-    // 直接色はpaletteの更新から独立している。
-    for (unsigned i = 0; i < 256; ++i) poke16(VC_GRAPHIC_PALETTE + i * 2u, 0xFFFFu);
-    assert(capture(root + "/highcolor-palette-independent.ppm") == opened);
-    assert(capture_lcd(root + "/highcolor-wide-palette-independent.ppm") == wide_opened);
-    graphic_word_writes = 0;
-    video_animate_scene(1, 0, 0, 0, 0, -1, 3);
-    assert(graphic_word_writes == 0);
-
-    for (int eye = 1; eye < 4; ++eye)
-    {
-        video_animate_scene(1, 0, eye, 0, eye == 3, -1, 3);
-        const auto changed = capture(root + "/highcolor-eye-" + std::to_string(eye) + ".ppm");
-        assert(changed != opened);
-        for (int y = 0; y < 240; ++y)
-            for (int x = 0; x < 256; ++x)
+            const auto packed = x < 256 ? indexed[y][x / 2] : 0;
+            const unsigned index = x % 2 ? packed % 16 : packed / 16;
+            uint16_t word = static_cast<uint16_t>(index);
+            if (direct)
             {
-                const bool outside_eye = x < 184 || x >= 216 || y < 56 || y >= 80;
-                if (outside_eye) assert(changed[y * 256 + x] == opened[y * 256 + x]);
+                if (title)
+                    word = x < 256 ? g_x68k_title_bitmap[y][x] : g_x68k_title_right[y][x - 256];
+                else if (!ending)
+                    word = expected_round_pixel(scene, x, y);
+                else
+                {
+                    word = g_x68k_stage_backgrounds[3][y][x];
+                    const bool card = x >= 160 && x < 256 && y >= 128 && y < 232;
+                    if (card) word = g_x68k_title_bitmap[y - 96][x];
+                    if (index != 0) word = expected_gold(x, y);
+                }
+                word = expected_fade(word, fade);
+            }
+            words[y * 320 + x] = word;
+        }
+    if (!animate || ending) return words;
+    const bool fading = std::clamp(fade, 0, 7) != 0;
+    const int eye = exiting ? 3 : (phase == 3 ? 1 : phase);
+    const unsigned eye_y = title ? 56 : 152;
+    for (unsigned y = 0; y < 24; ++y)
+        for (unsigned x = 0; x < 32; ++x)
+        {
+            const auto packed =
+                fading ? g_nes_title_bitmap[y + 56][(x + 184) / 2] : g_nes_eyes[eye][y][x / 2];
+            const auto index = x % 2 ? packed % 16 : packed / 16;
+            const auto high =
+                fading ? g_x68k_title_bitmap[y + 56][x + 184] : g_x68k_title_eyes[eye][y][x];
+            words[(y + eye_y) * 320 + x + 184] = direct ? expected_fade(high, fade) : index;
+        }
+    if (title)
+    {
+        const int ys[4] = {123, 137, 151, 165};
+        if (!fading && !exiting && selection >= 0 && selection < 4)
+            for (unsigned y = 0; y < 8; ++y)
+                for (unsigned x = 0; x < 8; ++x)
+                {
+                    const auto packed = g_nes_title_cursor_pattern[0][y * 4 + x / 2];
+                    const bool ink = (x % 2 ? packed % 16 : packed / 16) != 0;
+                    if (ink) words[(ys[selection] + y) * 320 + x + 12] = direct ? 0xffff : 4;
+                }
+        if (direct)
+            for (unsigned i = 0; i < g_x68k_title_logo_count; ++i)
+            {
+                const unsigned position = g_x68k_title_logo_positions[i];
+                words[(position / 256) * 320 + position % 256] =
+                    expected_fade(g_x68k_title_logo_colors[(frame / 8) & 7][i], fade);
             }
     }
-    video_animate_scene(1, 0, 0, 0, 0, -1, 3);
-    assert(capture(root + "/highcolor-restored.ppm") == opened);
-
-    // ロゴ8相は最大512画素だけを変更し、同一相と目/カーソルは再転写しない。
-    std::set<unsigned> logo_positions;
-    for (unsigned i = 0; i < g_x68k_title_logo_count; ++i)
-        logo_positions.insert(g_x68k_title_logo_positions[i]);
-    assert(logo_positions.size() <= 512);
-    for (int phase = 1; phase <= 8; ++phase)
+    else
     {
-        graphic_word_writes = 0;
-        video_animate_scene(1, phase * 8, 0, 0, 0, -1, 3);
-        assert(graphic_word_writes == g_x68k_title_logo_count);
-        const auto changed =
-            capture(root + "/highcolor-logo-" + std::to_string(phase & 7) + ".ppm");
-        for (unsigned i = 0; i < opened.size(); ++i)
-        {
-            const bool outside_logo = logo_positions.count(i) == 0;
-            if (outside_logo) assert(changed[i] == opened[i]);
-        }
-        graphic_word_writes = 0;
-        video_animate_scene(1, phase * 8 + 1, 0, 0, 0, -1, 3);
-        assert(graphic_word_writes == 0);
+        const int digit = std::clamp(lives, 0, 9);
+        for (unsigned y = 0; y < 8; ++y)
+            for (unsigned x = 0; x < 8; ++x)
+            {
+                const bool ink = (g_nes_digits[digit][y] & (128u >> x)) != 0;
+                if (ink)
+                    words[(y + 90) * 320 + x + 132] =
+                        direct ? expected_fade(expected_gold(x + 132, y + 90), fade) : 1;
+                else if (!direct)
+                    words[(y + 90) * 320 + x + 132] = 0;
+            }
     }
-    assert(capture(root + "/highcolor-logo-restored.ppm") == opened);
-
-    // 実機の二重bufferは片側が遅れても、右端まで通常合成と各更新後に一致する。
-    x68k::TiledCompositor tiled;
-    machine.bus().setVisualDamage(tiled.observer());
-    machine.sprite().setVisualDamage(tiled.observer());
-    machine.video().setVisualDamage(tiled.observer());
-    std::array<std::vector<uint16_t>, 2> tiled_pixels{std::vector<uint16_t>(kTitlePixels, 0x1234),
-                                                      std::vector<uint16_t>(kTitlePixels, 0x5678)};
-    std::vector<uint16_t> full_pixels(kTitlePixels);
-    const auto check_tiled = [&](unsigned buffer)
-    {
-        const auto count = tiled.render(graphics.data(), text_ram.data(), &machine.sprite(),
-                                        machine.video(), tiled_pixels[buffer].data(), buffer);
-        x68k::Compositor::render(graphics.data(), text_ram.data(), &machine.sprite(),
-                                 machine.video(), 0, 0, 320, 240, full_pixels.data(), 320);
-        assert(tiled_pixels[buffer] == full_pixels);
-        return count;
-    };
-    assert(check_tiled(0) == 300);
-    assert(check_tiled(1) == 300);
-    for (int step = 0; step < 12; ++step)
-    {
-        graphic_right_word_writes = 0;
-        video_animate_scene(1, step * 8, step % 3, 0, 0, step % 3, 3);
-        assert(graphic_right_word_writes == 0);
-        const unsigned buffer = step % 3 == 0 ? 0u : 1u;
-        check_tiled(buffer);
-        assert(check_tiled(buffer) == 0);
-    }
-    check_tiled(0);
-    check_tiled(1);
-
-    // fade-out開始だけ全面転写し、以後の暗転段では追加の全面転写をしない。
-    for (int fade = 1; fade <= 7; ++fade)
-    {
-        graphic_word_writes = graphic_right_word_writes = 0;
-        video_animate_scene(1, 0, 0, fade, 1, 0, 3);
-        assert(machine.video().graphicColorMode() ==
-               x68k::VideoController::GraphicColorMode::k16Color);
-        assert(graphic_word_writes == (fade == 1 ? kTitlePixels + 768u : 0u));
-        assert(graphic_right_word_writes == (fade == 1 ? kTitleRightPixels : 0u));
-        assert_title_right(false);
-        check_tiled(static_cast<unsigned>(fade) % 2u);
-        assert(check_tiled(static_cast<unsigned>(fade) % 2u) == 0);
-    }
-    check_tiled(0);
-    check_tiled(1);
-    const auto dark = capture(root + "/highcolor-fade-dark.ppm");
-    for (auto pixel : dark) assert(pixel <= 32);
-    const auto wide_dark = capture_lcd(root + "/highcolor-wide-fade-dark.ppm");
-    for (auto pixel : wide_dark) assert(pixel <= 32);
-    for (int fade = 6; fade >= 0; --fade)
-    {
-        graphic_right_word_writes = 0;
-        video_animate_scene(1, 0, 0, fade, 0, 0, 3);
-        assert(graphic_right_word_writes == (fade == 0 ? kTitleRightPixels : 0u));
-        assert_title_right(fade == 0);
-        check_tiled(static_cast<unsigned>(fade) % 2u);
-    }
-    assert(machine.video().graphicColorMode() ==
-           x68k::VideoController::GraphicColorMode::k65536Color);
-    video_set_stage(0);
-    assert_stage_background(0);
-    check_tiled(0);
-    check_tiled(1);
-    assert(machine.video().graphicColorMode() ==
-           x68k::VideoController::GraphicColorMode::k65536Color);
-    video_show_round(0);
-    assert_source_bitmap(0);
-    check_tiled(0);
-    check_tiled(1);
-    video_show_title();
-    assert_title_right(false);
-    check_tiled(1);
-    check_tiled(0);
-    video_animate_scene(1, 0, 0, 0, 0, -1, 3);
-    assert_title_right(true);
-    check_tiled(0);
-    check_tiled(1);
-    video_show_ending();
-    assert_title_right_clear();
-    check_tiled(1);
-    check_tiled(0);
-    machine.bus().setVisualDamage({});
-    machine.sprite().setVisualDamage({});
-    machine.video().setVisualDamage({});
-    std::printf(
-        "65536色タイトル検証成功: "
-        "左256保持・右64画素・palette独立・4眼相・ロゴ疎更新・二枚タイル一致・fade・16色復帰\n");
+    return words;
 }
 
 static std::vector<uint16_t> render_lcd()
 {
+    video_present();
     std::vector<uint16_t> pixels(kTitlePixels);
     x68k::Compositor::render(graphics.data(), text_ram.data(), &machine.sprite(), machine.video(),
-                             0, 0, 320, 240, pixels.data(), 320);
+                             0, 0, 320, 240, pixels.data(), 320, &machine.crtc());
     return pixels;
 }
 
-static void assert_stage_foreground(int stage)
+static void assert_words(const std::vector<uint16_t> &words, bool direct)
 {
-    // 透明index0はflash解除で黒へ戻るので、非透明色だけを黒背景と区別する。
-    for (unsigned index = 1; index < 16; ++index)
-    {
-        const bool opaque_black =
-            x68k::VideoController::toRgb565(machine.video().textPalette(index)) == 0;
-        if (opaque_black)
-            std::fprintf(
-                stderr,
-                "{\"event\":\"stage-palette-black\",\"stage\":%d,\"index\":%u,\"word\":%u}\n",
-                stage, index, static_cast<unsigned>(machine.video().textPalette(index)));
-        assert(!opaque_black);
-    }
-    const auto complete = render_lcd();
-    auto foreground_video = machine.video();
-    foreground_video.setVisualDamage({});
-    foreground_video.write(0x600, 0x0060u);
-    std::vector<uint16_t> foreground(kTitlePixels);
-    x68k::Compositor::render(graphics.data(), text_ram.data(), &machine.sprite(), foreground_video,
-                             0, 0, 320, 240, foreground.data(), 320);
-    unsigned opaque_pixels = 0;
-    unsigned background_pixels = 0;
+    video_present();
+    assert(machine.video().graphicColorMode() ==
+           (direct ? x68k::VideoController::GraphicColorMode::k65536Color
+                   : x68k::VideoController::GraphicColorMode::k16Color));
+    assert(machine.video().displayControl() == (direct ? 0x1fu : 0x71u));
+    const auto pixels = render_lcd();
     for (unsigned y = 0; y < 240; ++y)
         for (unsigned x = 0; x < 320; ++x)
         {
-            const unsigned offset = y * 320 + x;
-            const bool opaque = foreground[offset] != 0;
-            const auto expected =
-                opaque ? foreground[offset]
-                       : x68k::VideoController::toRgb565(g_x68k_stage_backgrounds[stage][y][x]);
-            const bool mismatched = complete[offset] != expected;
-            if (mismatched)
-                std::fprintf(stderr,
-                             "{\"event\":\"stage-foreground-mismatch\",\"stage\":%d,\"x\":%u,"
-                             "\"y\":%u,\"foreground\":%u,\"expected\":%u,\"actual\":%u}\n",
-                             stage, x, y, static_cast<unsigned>(foreground[offset]),
-                             static_cast<unsigned>(expected),
-                             static_cast<unsigned>(complete[offset]));
-            assert(complete[offset] == expected);
-            opaque_pixels += opaque;
-            background_pixels += !opaque;
+            const auto expected = words[y * 320 + x];
+            const auto actual = peek16(GVRAM + y * GVRAM_BYTES_PER_LINE + x * 2);
+            if (actual != expected)
+                std::fprintf(
+                    stderr,
+                    "{\"event\":\"scene-word\",\"x\":%u,\"y\":%u,\"expected\":%u,\"actual\":%u}\n",
+                    x, y, expected, actual);
+            assert(actual == expected);
+            const auto color =
+                direct ? expected : (expected ? machine.video().graphicPalette(expected) : 0);
+            assert(pixels[y * 320 + x] == x68k::VideoController::toRgb565(color));
         }
-    assert(opaque_pixels > 0 && background_pixels > 256);
+}
+
+static void show_scene(int scene)
+{
+    if (scene == -1)
+        video_show_title();
+    else if (scene == 4)
+        video_show_ending();
+    else
+        video_show_round(scene);
+}
+
+static void assert_source_bitmap(int scene)
+{
+    const bool direct =
+        machine.video().graphicColorMode() == x68k::VideoController::GraphicColorMode::k65536Color;
+    assert_words(expected_scene(scene, direct), direct);
+}
+
+static void prepare_stage_cells()
+{
+    if (stage_cells_ready) return;
+    video_set_visual_mode(VIDEO_VISUAL_16);
+    for (int stage = 0; stage < 4; ++stage)
+    {
+        video_set_stage(stage);
+        for (unsigned y = 0; y < 15; ++y)
+            for (unsigned x = 0; x < 64; ++x)
+            {
+                const auto pattern = peek16(SPR_BG0_NAME + (y * 64 + x) * 2) & 255u;
+                stage_cells[stage][y * 64 + x] = pattern < 9 ? pattern : 0;
+            }
+    }
+    stage_cells_ready = true;
+    video_set_visual_mode(VIDEO_VISUAL_65536);
+    video_init();
+}
+
+static std::vector<uint16_t> expected_stage(int stage, int scroll = 0, int erased_coin = -1)
+{
+    std::vector<uint16_t> words(kTitlePixels);
+    for (unsigned y = 0; y < 240; ++y)
+        for (unsigned x = 0; x < 320; ++x)
+        {
+            const unsigned world_x = (x + scroll) & 1023u;
+            const unsigned col = world_x / 16;
+            unsigned pattern = stage_cells[stage][(y / 16) * 64 + col];
+            if (static_cast<int>(col) == erased_coin && y / 16 == 11) pattern = 0;
+            const auto foreground =
+                pattern == 0
+                    ? 0
+                    : g_highcolor_background_patterns[pattern][(y % 16) * 16 + world_x % 16];
+            words[y * 320 + x] =
+                foreground != 0 ? foreground : g_x68k_stage_backgrounds[stage][y][x];
+        }
+    return words;
+}
+
+static void assert_stage_background(int stage) { assert_words(expected_stage(stage), true); }
+
+static void test_bitmap_cache()
+{
+    prepare_stage_cells();
+    for (int mode : {VIDEO_VISUAL_16, VIDEO_VISUAL_65536})
+    {
+        video_set_visual_mode(mode);
+        video_init();
+        const bool direct = mode == VIDEO_VISUAL_65536;
+        for (int from = -1; from <= 4; ++from)
+            for (int to = -1; to <= 4; ++to)
+            {
+                show_scene(from);
+                if (from != 4) video_animate_scene(from == -1, 8, 1, 0, 0, 1, 6);
+                show_scene(to);
+                assert_source_bitmap(to);
+                const auto baseline = bitmap_video_state();
+                graphic_word_writes = 0;
+                show_scene(to);
+                assert(graphic_word_writes == 0);
+                assert_bitmap_video_state(baseline);
+                assert_words(expected_scene(to, direct), direct);
+            }
+        video_show_round(0);
+        for (int invalid : {-1, 4, 100})
+        {
+            graphic_word_writes = 0;
+            video_show_round(invalid);
+            assert(graphic_word_writes == 0);
+            assert_source_bitmap(0);
+        }
+    }
+    video_init();
+}
+
+static void test_title_right_lifecycle()
+{
+    video_set_visual_mode(VIDEO_VISUAL_65536);
+    std::fill(graphics.begin(), graphics.end(), 0xa5);
+    video_init();
+    const auto outside = graphics;
+    video_show_title();
+    assert_source_bitmap(-1);
+    assert_title_right(true);
+    for (int scene = -1; scene <= 4; ++scene)
+    {
+        video_show_title();
+        show_scene(scene);
+        assert_source_bitmap(scene);
+        assert_outside_title_unchanged(outside);
+        video_set_visual_mode(VIDEO_VISUAL_16);
+        show_scene(scene);
+        assert_source_bitmap(scene);
+        assert_title_right_clear();
+        assert_outside_title_unchanged(outside);
+        video_set_visual_mode(VIDEO_VISUAL_65536);
+        show_scene(scene);
+        assert_source_bitmap(scene);
+    }
+    for (int reset = 0; reset < 2; ++reset)
+    {
+        video_show_title();
+        if (reset)
+            video_init();
+        else
+            video_clear_scene();
+        assert_title_right_clear();
+        assert_outside_title_unchanged(outside);
+    }
+    video_init();
+    std::fill(graphics.begin(), graphics.end(), 0);
+}
+
+static void test_highcolor_title(const std::string &root)
+{
+    video_set_visual_mode(VIDEO_VISUAL_65536);
+    hud_clear();
+    video_init();
+    video_show_title();
+    assert_source_bitmap(-1);
+    const auto initial = render_lcd();
+    assert(std::set<uint16_t>(initial.begin(), initial.end()).size() > 256);
+    x68k::TiledCompositor tiled;
+    machine.bus().setVisualDamage(tiled.observer());
+    machine.sprite().setVisualDamage(tiled.observer());
+    machine.video().setVisualDamage(tiled.observer());
+    std::array<std::vector<uint16_t>, 2> buffers{std::vector<uint16_t>(kTitlePixels),
+                                                 std::vector<uint16_t>(kTitlePixels)};
+    const auto check_tiled = [&](int slot)
+    {
+        tiled.render(graphics.data(), text_ram.data(), &machine.sprite(), machine.video(),
+                     buffers[slot].data(), slot, &machine.crtc());
+        assert(buffers[slot] == render_lcd());
+    };
+    for (int phase = 0; phase < 4; ++phase)
+        for (int selection = -1; selection < 4; ++selection)
+        {
+            video_animate_scene(1, phase * 8, phase, 0, phase == 3, selection, 3);
+            assert_words(expected_scene(-1, true, 0, true, phase, phase * 8, phase == 3, selection),
+                         true);
+            check_tiled(phase % 2);
+            graphic_word_writes = 0;
+            video_animate_scene(1, phase * 8 + 1, phase, 0, phase == 3, selection, 3);
+            assert(graphic_word_writes == 0);
+        }
+    for (int fade : {0, 1, 2, 3, 4, 5, 6, 7, 99, 6, 5, 4, 3, 2, 1, 0, -1})
+    {
+        video_animate_scene(1, 40, 2, fade, 0, -1, 3);
+        assert_words(expected_scene(-1, true, fade, true, 2, 40, 0, -1), true);
+        check_tiled(std::clamp(fade, 0, 7) % 2);
+        graphic_word_writes = 0;
+        video_animate_scene(1, 40, 2, fade, 0, -1, 3);
+        assert(graphic_word_writes == 0);
+    }
+    for (int phase = 0; phase < 8; ++phase)
+    {
+        video_animate_scene(1, phase * 8, 0, 0, 0, -1, 3);
+        assert_words(expected_scene(-1, true, 0, true, 0, phase * 8), true);
+        check_tiled(phase % 2);
+    }
+    for (unsigned i = 0; i < 256; ++i) poke16(VC_GRAPHIC_PALETTE + i * 2, 0xabcd);
+    for (unsigned i = 0; i < 16; ++i) poke16(VC_TEXT_PALETTE + i * 2, 0xffff);
+    assert_words(expected_scene(-1, true, 0, true, 0, 56), true);
+    capture_lcd(root + "/highcolor-wide.ppm");
+    check_tiled(0);
+    check_tiled(1);
+    machine.bus().setVisualDamage({});
+    machine.sprite().setVisualDamage({});
+    machine.video().setVisualDamage({});
+    video_show_title();
+}
+
+static void overlay_expected_actor(std::vector<uint16_t> &words, int pattern, int x, int y,
+                                   bool flip_x = false, bool flip_y = false)
+{
+    for (int sy = 0; sy < 16; ++sy)
+        for (int sx = 0; sx < 16; ++sx)
+        {
+            const int px = x + sx, py = y + sy;
+            const bool visible = px >= 0 && px < 320 && py >= 0 && py < 240;
+            if (!visible) continue;
+            const auto color =
+                g_highcolor_actor_patterns[pattern - 64]
+                                          [(flip_y ? 15 - sy : sy) * 16 + (flip_x ? 15 - sx : sx)];
+            if (color) words[py * 320 + px] = color;
+        }
+}
+
+static void test_highcolor_stages(const std::string &root)
+{
+    prepare_stage_cells();
+    video_set_visual_mode(VIDEO_VISUAL_65536);
+    hud_clear();
+    video_init();
+    const auto outside = graphics;
+    for (int from = 0; from < 4; ++from)
+        for (int to = 0; to < 4; ++to)
+        {
+            video_set_stage(from);
+            video_set_stage(to);
+            assert_stage_background(to);
+            graphic_word_writes = 0;
+            video_set_stage(to);
+            video_present();
+            assert(graphic_word_writes == 0);
+        }
+    for (int stage = 0; stage < 4; ++stage)
+    {
+        video_show_title();
+        video_set_stage(stage);
+        for (int scroll : {0, 1, 15, 16, 255, 256, 1023})
+        {
+            video_set_scroll(scroll);
+            assert_words(expected_stage(stage, scroll), true);
+            graphic_word_writes = 0;
+            video_set_scroll(scroll);
+            video_present();
+            assert(graphic_word_writes == 0);
+        }
+        video_set_scroll(0);
+        video_put_player(120, 168, 0, VIDEO_POSE_STAND);
+        video_put_enemy(0, 184, 184, ENEMY_WALKER, 0, 0, 0);
+        auto expected = expected_stage(stage);
+        overlay_expected_actor(expected, 88, 184, 184);
+        overlay_expected_actor(expected, 65, 120, 184);
+        overlay_expected_actor(expected, 64, 120, 168);
+        assert_words(expected, true);
+        capture_lcd(root + "/highcolor-stage-" + std::to_string(stage + 1) + ".ppm");
+        capture_lcd(root + "/mode-1-stage-" + std::to_string(stage + 1) + ".ppm");
+        // HUDの出力先だけを直接色へ変えても、文字内容と解除時の背景を保持する。
+        hud_clear();
+        Game game{};
+        game.stage = stage;
+        game.lives = 3;
+        text_byte_writes = text_word_writes = 0;
+        hud_draw(&game);
+        const auto with_hud = render_lcd();
+        assert(text_byte_writes == 0 && text_word_writes == 0);
+        assert(with_hud != std::vector<uint16_t>(kTitlePixels));
+        const unsigned gradient[8][3] = {{248, 252, 255}, {232, 248, 255}, {208, 232, 255},
+                                         {176, 208, 248}, {144, 184, 240}, {112, 160, 224},
+                                         {88, 128, 208},  {64, 96, 176}};
+        unsigned ink_pixels = 0;
+        for (unsigned y = 0; y < 8; ++y)
+            for (unsigned x = 0; x < 8; ++x)
+            {
+                const bool ink = (g_nes_font['3' - 32][y] & (128u >> x)) != 0;
+                if (!ink) continue;
+                const auto &rgb = gradient[y];
+                const uint16_t color =
+                    (rgb[1] / 8) * 2048 + (rgb[0] / 8) * 64 + (rgb[2] / 8) * 2 + (rgb[1] / 4) % 2;
+                assert(peek16(GVRAM + (y + 16) * GVRAM_BYTES_PER_LINE + (x + 18) * 2) == color);
+                ++ink_pixels;
+            }
+        assert(ink_pixels > 0);
+        graphic_word_writes = 0;
+        hud_draw(&game);
+        video_present();
+        assert(graphic_word_writes == 0);
+        game.paused = 1;
+        hud_draw(&game);
+        assert(render_lcd() != with_hud);
+        game.paused = 0;
+        hud_draw(&game);
+        assert(render_lcd() == with_hud);
+        game.state = GS_CLEAR;
+        hud_draw(&game);
+        assert(render_lcd() != with_hud);
+        game.state = GS_PLAYING;
+        hud_draw(&game);
+        assert(render_lcd() == with_hud);
+        game.state = GS_GAMEOVER;
+        hud_draw(&game);
+        assert(render_lcd() != with_hud);
+        game.state = GS_PLAYING;
+        hud_draw(&game);
+        assert(render_lcd() == with_hud);
+        // 面を変えて同じ残機/得点を描く場合も、resetで失われたHUDを復元する。
+        game.stage = (stage + 1) % 4;
+        video_set_stage(game.stage);
+        hud_draw(&game);
+        const auto next_stage_hud = render_lcd();
+        hud_clear();
+        hud_draw(&game);
+        assert(render_lcd() == next_stage_hud);
+        video_set_stage(stage);
+        hud_clear();
+        video_hide_from(0);
+        assert_stage_background(stage);
+        video_set_scroll(16);
+        video_clear_coin(1);
+        assert_words(expected_stage(stage, 16, 1), true);
+        video_show_round(stage);
+        assert_source_bitmap(stage);
+        video_set_stage(stage);
+        assert_stage_background(stage);
+        for (int scene = -1; scene <= 4; ++scene)
+        {
+            show_scene(scene);
+            assert_source_bitmap(scene);
+            video_set_stage(stage);
+            assert_stage_background(stage);
+        }
+        assert_outside_title_unchanged(outside);
+    }
+    video_init();
+}
+
+static void test_visual_mode_selection(const std::string &root)
+{
+    const int ys[4] = {123, 137, 151, 165};
+    const char *labels[4] = {"START 4BIT COLOR", "START 16BIT COLOR", "CONTINUE", "OPTION"};
+    for (int mode : {0, 1, 0, 1})
+    {
+        const bool direct = mode == 1;
+        hud_clear();
+        video_set_visual_mode(mode);
+        video_show_title();
+        for (int selection = 0; selection < 4; ++selection)
+        {
+            video_animate_scene(1, 0, 0, 0, 0, selection, 3);
+            assert_words(expected_scene(-1, direct, 0, true, 0, 0, 0, selection), direct);
+        }
+        for (int option = 0; option < 4; ++option)
+            for (int i = 0; labels[option][i]; ++i)
+                for (unsigned y = 0; y < 8; ++y)
+                    for (unsigned x = 0; x < 8; ++x)
+                    {
+                        const bool ink = (g_nes_font[labels[option][i] - 32][y] & (128u >> x)) != 0;
+                        const auto expected = ink ? (direct ? 0xffffu : 4u) : 0u;
+                        assert(peek16(GVRAM + (ys[option] + y) * GVRAM_BYTES_PER_LINE +
+                                      (24 + i * 8 + x) * 2) == expected);
+                    }
+        capture_lcd(root + (direct ? "/menu-16bit.ppm" : "/menu-4bit.ppm"));
+        for (int fade = 1; fade < 8; ++fade)
+        {
+            video_animate_scene(1, 0, 0, fade, 0, -1, 3);
+            assert_words(expected_scene(-1, direct, fade, true, 0, 0, 0, -1), direct);
+        }
+        for (auto pixel : render_lcd()) assert(direct ? pixel == 0 : pixel <= 32);
+        for (int stage = 0; stage < 4; ++stage)
+        {
+            video_set_stage(stage);
+            video_present();
+            if (direct)
+                assert_stage_background(stage);
+            else
+            {
+                assert(machine.video().displayControl() == 0x60u);
+                assert_title_right_clear();
+                unsigned mountains = 0;
+                for (unsigned row = 0; row < 13; ++row)
+                    for (unsigned col = 0; col < 64; ++col)
+                        mountains += (peek16(SPR_BG0_NAME + (row * 64 + col) * 2) & 255u) >= 9;
+                assert(mountains > 0);
+            }
+        }
+    }
+    video_set_visual_mode(VIDEO_VISUAL_65536);
+    video_init();
 }
 
 static void assert_player_visibility()
@@ -1034,363 +1101,6 @@ static void assert_player_visibility()
     assert(render_lcd() == complete);
 }
 
-static void test_highcolor_stages(const std::string &root)
-{
-    hud_clear();
-    std::fill(graphics.begin(), graphics.end(), 0xa5);
-    video_init();
-    video_hide_from(0);
-    const auto outside_reference = graphics;
-    x68k::TiledCompositor tiled;
-    machine.bus().setVisualDamage(tiled.observer());
-    machine.sprite().setVisualDamage(tiled.observer());
-    machine.video().setVisualDamage(tiled.observer());
-    std::array<std::vector<uint16_t>, 2> buffers{std::vector<uint16_t>(kTitlePixels, 0x1234),
-                                                 std::vector<uint16_t>(kTitlePixels, 0x5678)};
-    const auto check_tiled = [&](unsigned buffer)
-    {
-        const auto count = tiled.render(graphics.data(), text_ram.data(), &machine.sprite(),
-                                        machine.video(), buffers[buffer].data(), buffer);
-        assert(buffers[buffer] == render_lcd());
-        return count;
-    };
-
-    // 全16組のstage切替と無効番号で、背景の常駐判定と320x240の所有範囲を保証する。
-    for (int from = 0; from < 4; ++from)
-        for (int to = 0; to < 4; ++to)
-        {
-            video_set_stage(from);
-            check_tiled(0);
-            graphic_word_writes = 0;
-            video_set_stage(to);
-            assert(graphic_word_writes == (from == to ? 0 : kTitlePixels));
-            assert_stage_background(to);
-            assert_outside_title_unchanged(outside_reference);
-            check_tiled(1);
-            check_tiled(0);
-            assert(check_tiled(0) == 0);
-            assert(check_tiled(1) == 0);
-        }
-    video_set_stage(0);
-    for (int invalid : {-1, 4, 100})
-    {
-        graphic_word_writes = 0;
-        video_set_stage(invalid);
-        assert(graphic_word_writes == 0);
-        assert_stage_background(0);
-        check_tiled(0);
-        check_tiled(1);
-    }
-
-    for (int stage = 0; stage < 4; ++stage)
-    {
-        hud_clear();
-        video_hide_from(0);
-        video_set_stage(stage);
-        video_set_scroll(0);
-        video_put_player(120, 168, 0, VIDEO_POSE_STAND);
-        video_put_enemy(0, 184, 184, ENEMY_WALKER, 0, 0, 0);
-        video_put_effect(204, 170, 10, 0);
-        Game game{};
-        game.stage = stage;
-        game.lives = 3;
-        hud_draw(&game);
-        assert_stage_background(stage);
-        assert_stage_foreground(stage);
-        assert_player_visibility();
-        const auto image =
-            capture_lcd(root + "/highcolor-stage-" + std::to_string(stage + 1) + ".ppm");
-        assert(std::set<uint16_t>(image.begin(), image.end()).size() > 256);
-        // ポーズ文字の追加/消去後も、実機の合成順で背景と前景を完全に復元する。
-        graphic_word_writes = 0;
-        game.paused = 1;
-        hud_draw(&game);
-        assert(render_lcd() != image);
-        assert_stage_foreground(stage);
-        check_tiled(0);
-        check_tiled(1);
-        game.paused = 0;
-        hud_draw(&game);
-        assert(render_lcd() == image);
-        assert_stage_foreground(stage);
-        assert(graphic_word_writes == 0);
-        check_tiled(1);
-        check_tiled(0);
-        const auto background_reference = graphics;
-        unsigned step = 0;
-        for (int scroll : {0, 1, 15, 16, 255, 256, 1023})
-        {
-            graphic_word_writes = 0;
-            video_set_scroll(scroll);
-            assert(graphic_word_writes == 0);
-            assert(graphics == background_reference);
-            assert_stage_background(stage);
-            assert_stage_foreground(stage);
-            const unsigned buffer = step++ % 3 == 0 ? 0u : 1u;
-            check_tiled(buffer);
-            assert(check_tiled(buffer) == 0);
-        }
-        check_tiled(0);
-        check_tiled(1);
-
-        // 足場のないcoinセルは、除去後に黒ではなく固定した山背景をそのまま見せる。
-        hud_clear();
-        video_hide_from(0);
-        int coin_column = -1;
-        for (int column = 0; column < LEVEL_METACOLS; ++column)
-        {
-            const auto feature = level_feature_at(column * 16);
-            const bool unobstructed = feature == FEAT_FLAT || feature == FEAT_PIT;
-            const bool has_coin = level_has_coin(column) != 0;
-            const bool away_from_flags = column != 29 && column != 63;
-            if (unobstructed && has_coin && away_from_flags)
-            {
-                coin_column = column;
-                break;
-            }
-        }
-        assert(coin_column >= 0);
-        video_set_scroll(coin_column * 16);
-        const auto before_coin = render_lcd();
-        check_tiled(0);
-        check_tiled(1);
-        graphic_word_writes = 0;
-        video_clear_coin(coin_column);
-        assert(graphic_word_writes == 0);
-        assert(graphics == background_reference);
-        const auto after_coin = render_lcd();
-        unsigned changed_coin_pixels = 0;
-        for (unsigned y = 176; y < 192; ++y)
-            for (unsigned x = 0; x < 16; ++x)
-            {
-                const auto expected =
-                    x68k::VideoController::toRgb565(g_x68k_stage_backgrounds[stage][y][x]);
-                assert(after_coin[y * 320 + x] == expected);
-                changed_coin_pixels += before_coin[y * 320 + x] != after_coin[y * 320 + x];
-            }
-        assert(changed_coin_pixels > 0);
-        assert_stage_foreground(stage);
-        check_tiled(1);
-        check_tiled(0);
-        assert(check_tiled(0) == 0);
-
-        // mode3のまま別画像へ移るtitle往復でも、stageを古い常駐画像と誤認しない。
-        graphic_word_writes = 0;
-        video_animate_scene(1, 0, 0, 0, 0, -1, 3);
-        assert(graphic_word_writes == kTitlePixels + 768u + g_x68k_title_logo_count);
-        for (unsigned y = 0; y < 240; ++y)
-            for (unsigned x = 0; x < 256; ++x)
-                assert(peek16(GVRAM + y * GVRAM_BYTES_PER_LINE + x * 2) ==
-                       g_x68k_title_bitmap[y][x]);
-        assert_title_right(true);
-        check_tiled(0);
-        check_tiled(1);
-        graphic_word_writes = 0;
-        video_set_stage(stage);
-        assert(graphic_word_writes == kTitlePixels);
-        assert_stage_background(stage);
-        check_tiled(1);
-        check_tiled(0);
-
-        // 全round・ending・clear・initへの退出後、再入場時は背景全体を復元する。
-        for (int exit = 0; exit < 7; ++exit)
-        {
-            const bool is_round = exit < 4;
-            const bool is_ending = exit == 4;
-            const bool is_clear = exit == 5;
-            graphic_word_writes = 0;
-            if (is_round)
-                video_show_round(exit);
-            else if (is_ending)
-                video_show_ending();
-            else if (is_clear)
-                video_clear_scene();
-            else
-                video_init();
-            assert(graphic_word_writes == (exit < 5 ? kTitlePixels : kTitleRightPixels));
-            if (is_round)
-                assert_source_bitmap(exit);
-            else
-                assert_title_right_clear();
-            assert_outside_title_unchanged(outside_reference);
-            check_tiled(0);
-            check_tiled(1);
-            graphic_word_writes = 0;
-            video_set_stage(stage);
-            assert(graphic_word_writes == kTitlePixels);
-            assert_stage_background(stage);
-            check_tiled(1);
-            check_tiled(0);
-        }
-        assert_outside_title_unchanged(outside_reference);
-    }
-    machine.bus().setVisualDamage({});
-    machine.sprite().setVisualDamage({});
-    machine.video().setVisualDamage({});
-    hud_clear();
-    video_init();
-    std::fill(graphics.begin(), graphics.end(), 0);
-    std::printf(
-        "65536色stage検証成功: "
-        "全16遷移・前景全画素・固定背景scroll・coin透過・全退出・二枚タイル\n");
-}
-
-static void test_visual_mode_selection(const std::string &root)
-{
-    hud_clear();
-    video_set_visual_mode(VIDEO_VISUAL_65536);
-    video_init();
-    video_set_stage(0);
-    const auto outside = graphics;
-    x68k::TiledCompositor tiled;
-    machine.bus().setVisualDamage(tiled.observer());
-    machine.sprite().setVisualDamage(tiled.observer());
-    machine.video().setVisualDamage(tiled.observer());
-    std::array<std::vector<uint16_t>, 2> buffers{std::vector<uint16_t>(kTitlePixels),
-                                                 std::vector<uint16_t>(kTitlePixels)};
-    const auto check_tiled = [&](unsigned buffer)
-    {
-        const auto count = tiled.render(graphics.data(), text_ram.data(), &machine.sprite(),
-                                        machine.video(), buffers[buffer].data(), buffer);
-        assert(buffers[buffer] == render_lcd());
-        return count;
-    };
-    const int ys[4] = {123, 137, 151, 165};
-    const char *labels[4] = {"START 4BIT COLOR", "START 16BIT COLOR", "CONTINUE", "OPTION"};
-
-    // 両方向・再訪で旧素材/高色素材を取り違えず、menu全字形と4つのcursorを保持する。
-    for (int mode : {0, 1, 0, 1})
-    {
-        hud_clear();
-        graphic_word_writes = 0;
-        video_set_visual_mode(mode);
-        assert(graphic_word_writes == 0);
-        video_show_title();
-        video_animate_scene(1, 0, 0, 0, 0, -1, 3);
-        const bool direct = mode == VIDEO_VISUAL_65536;
-        if (direct)
-            assert_title_right(true);
-        else
-            assert_title_right_clear();
-        assert(machine.video().graphicColorMode() ==
-               (direct ? x68k::VideoController::GraphicColorMode::k65536Color
-                       : x68k::VideoController::GraphicColorMode::k16Color));
-        for (unsigned y = 0; y < 240; ++y)
-            for (unsigned x = 0; x < 256; ++x)
-            {
-                const bool in_eye = x >= 184 && x < 216 && y >= 56 && y < 80;
-                const auto packed = !direct && in_eye ? g_nes_eyes[0][y - 56][(x - 184) / 2]
-                                                      : g_nes_title_bitmap[y][x / 2];
-                const uint16_t expected =
-                    direct ? g_x68k_title_bitmap[y][x] : ((x & 1) ? packed & 15 : packed >> 4);
-                assert(peek16(GVRAM + y * GVRAM_BYTES_PER_LINE + x * 2) == expected);
-            }
-        for (int option = 0; option < 4; ++option)
-            for (int index = 0; labels[option][index]; ++index)
-                for (unsigned y = 0; y < 8; ++y)
-                    for (unsigned x = 0; x < 8; ++x)
-                    {
-                        const auto glyph = g_nes_font[labels[option][index] - 32][y];
-                        const uint16_t expected =
-                            glyph & (128u >> x) ? (direct ? 0xffffu : 4u) : 0u;
-                        assert(peek16(GVRAM + (ys[option] + y) * GVRAM_BYTES_PER_LINE +
-                                      (24 + index * 8 + x) * 2) == expected);
-                    }
-        const auto title = render_lcd();
-        const auto color_count = std::set<uint16_t>(title.begin(), title.end()).size();
-        assert(direct ? color_count > 256 : color_count <= 16);
-        graphic_word_writes = 0;
-        video_set_visual_mode(mode);
-        video_animate_scene(1, 0, 0, 0, 0, -1, 3);
-        assert(graphic_word_writes == 0);
-        assert(render_lcd() == title);
-        for (int selection = 0; selection < 4; ++selection)
-        {
-            graphic_word_writes = 0;
-            video_animate_scene(1, 0, 0, 0, 0, selection, 3);
-            assert(graphic_word_writes == 4 * 64);
-            for (int option = 0; option < 4; ++option)
-                for (int y = 0; y < 8; ++y)
-                    for (int x = 0; x < 8; ++x)
-                    {
-                        const auto packed = g_nes_title_cursor_pattern[0][y * 4 + x / 2];
-                        const auto ink = (x & 1) ? packed & 15 : packed >> 4;
-                        const uint16_t expected =
-                            option == selection && ink ? (direct ? 0xffffu : 4u) : 0u;
-                        assert(peek16(GVRAM + (ys[option] + y) * GVRAM_BYTES_PER_LINE +
-                                      (12 + x) * 2) == expected);
-                    }
-            check_tiled(selection & 1);
-            assert(check_tiled(selection & 1) == 0);
-        }
-        capture_lcd(root + (direct ? "/menu-16bit.ppm" : "/menu-4bit.ppm"));
-        for (int fade = 1; fade < 8; ++fade)
-        {
-            video_animate_scene(1, 0, 0, fade, 1, -1, 3);
-            assert(machine.video().graphicColorMode() ==
-                   x68k::VideoController::GraphicColorMode::k16Color);
-            check_tiled(fade & 1);
-        }
-        for (auto pixel : render_lcd()) assert(pixel <= 32);
-        video_animate_scene(1, 0, 0, 0, 0, 1, 3);
-
-        // 旧16色はG-VRAMを表示せず従来の山PCG、高色は固定背景を表示する。
-        for (int stage = 0; stage < 4; ++stage)
-        {
-            hud_clear();
-            video_hide_from(0);
-            graphic_word_writes = 0;
-            video_set_stage(stage);
-            assert(graphic_word_writes == (direct ? kTitlePixels : 0u));
-            const auto resident = graphics;
-            assert(machine.video().displayControl() == (direct ? 0x007fu : 0x0060u));
-            if (direct)
-                assert_stage_background(stage);
-            else
-                assert_title_right_clear();
-            unsigned mountain_cells = 0;
-            for (unsigned cy = 0; cy < 13; ++cy)
-                for (unsigned cx = 0; cx < 64; ++cx)
-                    mountain_cells += peek16(SPR_BG0_NAME + (cy * 64 + cx) * 2) >= 9;
-            assert(direct ? mountain_cells == 0 : mountain_cells > 0);
-            graphic_word_writes = 0;
-            video_set_visual_mode(mode);
-            video_set_stage(stage);
-            assert(graphic_word_writes == 0);
-            video_put_player(120, 168, 0, VIDEO_POSE_STAND);
-            video_put_enemy(0, 184, 184, ENEMY_WALKER, 0, 0, 0);
-            Game game{};
-            game.stage = stage;
-            game.lives = 3;
-            hud_draw(&game);
-            assert_player_visibility();
-            const auto pixels = capture_lcd(root + "/mode-" + std::to_string(mode) + "-stage-" +
-                                            std::to_string(stage + 1) + ".ppm");
-            const auto colors = std::set<uint16_t>(pixels.begin(), pixels.end()).size();
-            assert(direct ? colors > 256 : colors <= 16);
-            for (int scroll : {0, 1, 16, 255, 1023})
-            {
-                graphic_word_writes = 0;
-                video_set_scroll(scroll);
-                assert(graphic_word_writes == 0 && graphics == resident);
-                check_tiled(scroll & 1);
-            }
-            check_tiled(0);
-            check_tiled(1);
-            assert(check_tiled(0) == 0 && check_tiled(1) == 0);
-            assert_outside_title_unchanged(outside);
-        }
-    }
-    machine.bus().setVisualDamage({});
-    machine.sprite().setVisualDamage({});
-    machine.video().setVisualDamage({});
-    hud_clear();
-    video_set_visual_mode(VIDEO_VISUAL_65536);
-    video_init();
-    std::fill(graphics.begin(), graphics.end(), 0);
-    std::printf("色数選択検証成功: 両モード4行menu/旧人物・目・山/4cursor/fade/全4面/二枚一致\n");
-}
-
 #include "test_rounds.inc.cpp"
 
 int main(int argc, char **argv)
@@ -1403,6 +1113,8 @@ int main(int argc, char **argv)
     memory.graphicVram = graphics.data();
     memory.iplRom = rom.data();
     machine.setMemory(memory);
+    test_graphic_access_modes();
+    test_sprite_flip_attribute_bits();
     test_audio();
     test_debug_hud();
     test_bitmap_cache();
@@ -1411,6 +1123,7 @@ int main(int argc, char **argv)
     test_highcolor_stages(root);
     test_visual_mode_selection(root);
     test_highcolor_rounds(root);
+    video_set_visual_mode(VIDEO_VISUAL_16);
     video_init();
 
     // ゲーム自身が 256x240 の表示期間を確立することを保証する。

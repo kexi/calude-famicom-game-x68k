@@ -2,7 +2,9 @@
 
 #include "hud.h"
 
+#include "highcolor_renderer.h"
 #include "hw.h"
+#include "video.h"
 
 #define TVRAM 0xE00000u
 #define TVRAM_BYTES_PER_LINE 128
@@ -137,6 +139,24 @@ static void put_char(int col, int row, char c)
         if (unchanged) return;
     }
 
+    const int direct = video_is_highcolor_stage();
+    if (direct)
+    {
+        uint8_t upper[8] = {0}, lower[8] = {0};
+        for (int y = 0; y < 7; ++y)
+        {
+            const int in_upper = y < 4;
+            if (in_upper)
+                upper[y + 4] = (uint8_t)(kGlyphs[index][y] << 2);
+            else
+                lower[y - 4] = (uint8_t)(kGlyphs[index][y] << 2);
+        }
+        hc_glyph(col * 8, row * 16, upper, 3);
+        hc_glyph(col * 8, row * 16 + 8, lower, 3);
+        if (cacheable) debug_glyphs[col] = (uint8_t)(index + 1);
+        return;
+    }
+
     const uint32_t base = TVRAM + (uint32_t)row * 16u * TVRAM_BYTES_PER_LINE + (uint32_t)col;
     for (int y = 0; y < 16; ++y)
     {
@@ -175,6 +195,7 @@ static void put_num(int col, int row, uint32_t value, int digits)
 
 static int cached_state = -1;
 static int cached_lives, cached_coins, cached_paused;
+static int cached_stage, cached_visual_mode;
 static uint32_t cached_score;
 static uint8_t cached_tens;
 
@@ -182,6 +203,7 @@ void hud_clear(void)
 {
     cached_state = -1;
     invalidate_debug_line();
+    hc_clear_text();
     // 初回はHuman68kの文字が任意の場所にある。以後のTVRAM描画はHUDが所有する。
     const int first_clear = !text_initialized;
     if (first_clear)
@@ -224,6 +246,12 @@ static void nes_char(int x, int y, char c, int color)
     const int overlaps_debug = y < 16 && y + 8 > 0;
     if (overlaps_debug) invalidate_debug_line();
     const int index = c >= 32 && c < 96 ? c - 32 : 0;
+    const int direct = video_is_highcolor_stage();
+    if (direct)
+    {
+        hc_glyph(x, y, g_nes_font[index], color);
+        return;
+    }
     const int shift = x & 7;
     const uint8_t left_mask = (uint8_t)(0xffu >> shift);
     const int split_byte = shift != 0;
@@ -255,7 +283,8 @@ void hud_draw(const Game *g)
 {
     const int unchanged = cached_state == g->state && cached_lives == g->lives &&
                           cached_coins == g->coins && cached_score == g->score &&
-                          cached_tens == g->score_tens && cached_paused == g->paused;
+                          cached_tens == g->score_tens && cached_paused == g->paused &&
+                          cached_stage == g->stage && cached_visual_mode == g->visual_mode;
     if (unchanged) return;
     cached_state = g->state;
     cached_lives = g->lives;
@@ -263,6 +292,8 @@ void hud_draw(const Game *g)
     cached_score = g->score;
     cached_tens = g->score_tens;
     cached_paused = g->paused;
+    cached_stage = g->stage;
+    cached_visual_mode = g->visual_mode;
     nes_char(18, 16, (char)('0' + g->lives), 3);
     int coins = g->coins;
     while (coins >= 100) coins -= 100;
@@ -288,7 +319,11 @@ void hud_draw(const Game *g)
     }
     nes_char(128, 25, (char)('0' + g->score_tens), 3);
     nes_char(136, 25, '0', 3);
-    nes_text(104, 93, "      ", 6);
+    const int direct = video_is_highcolor_stage();
+    if (direct)
+        nes_text(108, 93, "     ", 6);
+    else
+        nes_text(104, 93, "      ", 6);
     nes_text(104, 107, "      ", 6);
     nes_text(96, 101, "        ", 6);
     nes_text(108, 113, "     ", 3);

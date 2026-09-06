@@ -6,6 +6,8 @@ extern "C"
     extern const uint16_t g_nes_title_fades[8][16];
     extern const uint16_t g_nes_title_palette[16];
     extern const uint8_t g_nes_digits[10][8];
+    extern const uint16_t g_x68k_title_eyes[4][24][32];
+    extern const uint16_t g_highcolor_actor_patterns[45][256];
 }
 
 static unsigned round_source_index(int stage, unsigned x, unsigned y)
@@ -14,11 +16,12 @@ static unsigned round_source_index(int stage, unsigned x, unsigned y)
     return x % 2 == 0 ? packed / 16 : packed % 16;
 }
 
-static uint16_t round_expected_ink(unsigned index)
+static uint16_t highcolor_text_ink(unsigned x, unsigned y)
 {
-    const bool black = index == 0;
-    if (black) return 0;
-    return index == 4 ? 0xFFFFu : g_nes_title_fades[0][index];
+    const unsigned red = 31 - y % 8;
+    const unsigned green = 63 - 3 * (y % 8) - x % 4;
+    const unsigned blue = 23 - 2 * (y % 8) + x % 4;
+    return static_cast<uint16_t>((green / 2) * 2048 + red * 64 + blue * 2 + green % 2);
 }
 
 static uint16_t round_expected_fade(uint16_t color, int fade)
@@ -46,8 +49,15 @@ static std::vector<uint16_t> round_expected_words(int stage, bool direct, bool a
             const bool old_area = x < 256;
             const unsigned index = old_area ? round_source_index(stage, x, y) : 0;
             const bool face_card = x >= 160 && x < 256 && y >= 128 && y < 232;
-            const uint16_t word = index != 0 || face_card ? round_expected_ink(index)
-                                                          : g_x68k_stage_backgrounds[stage][y][x];
+            uint16_t word = face_card    ? g_x68k_title_bitmap[y - 96][x]
+                            : index != 0 ? highcolor_text_ink(x, y)
+                                         : g_x68k_stage_backgrounds[stage][y][x];
+            const bool lives_icon = x >= 108 && x < 116 && y >= 89 && y < 97;
+            if (lives_icon)
+            {
+                const auto icon = g_highcolor_actor_patterns[43][(y - 89) * 16 + x - 108];
+                word = icon != 0 ? icon : g_x68k_stage_backgrounds[stage][y][x];
+            }
             words[y * 320 + x] = direct ? round_expected_fade(word, safe_fade) : index;
         }
     if (!animated) return words;
@@ -60,8 +70,10 @@ static std::vector<uint16_t> round_expected_words(int stage, bool direct, bool a
             const auto packed =
                 fading ? g_nes_title_bitmap[y + 56][(x + 184) / 2] : g_nes_eyes[eye][y][x / 2];
             const unsigned index = x % 2 == 0 ? packed / 16 : packed % 16;
+            const uint16_t direct_eye =
+                fading ? g_x68k_title_bitmap[y + 56][x + 184] : g_x68k_title_eyes[eye][y][x];
             words[(y + 152) * 320 + x + 184] =
-                direct ? round_expected_fade(round_expected_ink(index), safe_fade) : index;
+                direct ? round_expected_fade(direct_eye, safe_fade) : index;
         }
     const int digit = std::clamp(lives, 0, 9);
     for (unsigned y = 0; y < 8; ++y)
@@ -70,7 +82,8 @@ static std::vector<uint16_t> round_expected_words(int stage, bool direct, bool a
             const bool ink = (g_nes_digits[digit][y] & (128u >> x)) != 0;
             auto &word = words[(y + 90) * 320 + x + 132];
             if (ink)
-                word = direct ? round_expected_fade(round_expected_ink(1), safe_fade) : 1;
+                word = direct ? round_expected_fade(highcolor_text_ink(x + 132, y + 90), safe_fade)
+                              : 1;
             else if (!direct)
                 word = 0;
         }
@@ -83,7 +96,7 @@ static void assert_round_frame(const std::vector<uint16_t> &expected_words, bool
     const auto expected_mode = direct ? x68k::VideoController::GraphicColorMode::k65536Color
                                       : x68k::VideoController::GraphicColorMode::k16Color;
     assert(machine.video().graphicColorMode() == expected_mode);
-    const bool display_matches = machine.video().displayControl() == (direct ? 0x007Fu : 0x0071u);
+    const bool display_matches = machine.video().displayControl() == (direct ? 0x001Fu : 0x0071u);
     assert(display_matches);
     const auto pixels = render_lcd();
     const int safe_fade = std::clamp(fade, 0, 7);
@@ -126,8 +139,9 @@ static void test_highcolor_rounds(const std::string &root)
                                                  std::vector<uint16_t>(kTitlePixels, 0x5678)};
     const auto check_tiled = [&](unsigned buffer)
     {
-        const auto count = tiled.render(graphics.data(), text_ram.data(), &machine.sprite(),
-                                        machine.video(), buffers[buffer].data(), buffer);
+        const auto count =
+            tiled.render(graphics.data(), text_ram.data(), &machine.sprite(), machine.video(),
+                         buffers[buffer].data(), buffer, &machine.crtc());
         assert(buffers[buffer] == render_lcd());
         return count;
     };
@@ -154,17 +168,21 @@ static void test_highcolor_rounds(const std::string &root)
         check_tiled(1);
         assert(check_tiled(0) == 0 && check_tiled(1) == 0);
 
-        unsigned black_card_pixels = 0;
+        std::set<uint16_t> portrait_colors;
         unsigned mountain_pixels = 0;
         for (unsigned y = 0; y < 240; ++y)
             for (unsigned x = 0; x < 320; ++x)
             {
                 const bool card = x >= 160 && x < 256 && y >= 128 && y < 232;
                 const bool empty = x >= 256 || round_source_index(stage, x, y) == 0;
-                black_card_pixels += card && empty && base[y * 320 + x] == 0;
+                if (card)
+                {
+                    assert(base[y * 320 + x] == g_x68k_title_bitmap[y - 96][x]);
+                    portrait_colors.insert(base[y * 320 + x]);
+                }
                 mountain_pixels += !card && empty && base[y * 320 + x] != 0;
             }
-        assert(black_card_pixels > 0 && mountain_pixels > 15360);
+        assert(portrait_colors.size() > 16 && mountain_pixels > 15360);
 
         int previous_eye = -1;
         for (unsigned pose = 0; pose < 5; ++pose)
@@ -290,14 +308,14 @@ static void test_highcolor_rounds(const std::string &root)
         assert_outside_title_unchanged(outside_reference);
     }
 
-    // endingは両選択とも16色で、右側に山やROUNDの文字を残さない。
+    // endingも選択を保持し、前のROUND文字/目/数字を残さない。
     for (int mode : {VIDEO_VISUAL_65536, VIDEO_VISUAL_16})
     {
         video_set_visual_mode(mode);
         video_show_round(2);
         video_show_ending();
         assert_source_bitmap(4);
-        assert_title_right_clear();
+        if (mode == VIDEO_VISUAL_16) assert_title_right_clear();
         check_tiled(0);
         check_tiled(1);
     }
@@ -310,6 +328,6 @@ static void test_highcolor_rounds(const std::string &root)
     hud_clear();
     std::fill(graphics.begin(), graphics.end(), 0);
     std::printf(
-        "ROUND色数検証成功: 全4面全画素・顔card黒・4眼相/数字・fade・同値cache・"
+        "ROUND色数検証成功: 全4面全画素・高色人物/残機icon・4眼相/数字・fade・同値cache・"
         "全16stage復帰・4bit維持・二枚タイル一致\n");
 }

@@ -31,7 +31,7 @@ def main() -> None:
             // 手組み合成では実機とHUD/BGの重ね順が変わるため、同じ合成器を使う。
             x68k::Compositor::render(graphicVram.data(), textVram.data(),
                 &machine.sprite(), machine.video(), 0, 0, kWidth, kHeight,
-                pixels.data(), kWidth);
+                pixels.data(), kWidth, &machine.crtc());
         }
 """ + marker)
     args.build.mkdir(parents=True, exist_ok=True)

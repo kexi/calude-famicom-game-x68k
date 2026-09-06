@@ -14,8 +14,11 @@ void video_init(void);
 #define VIDEO_VISUAL_65536 1
 // 同じ設定は何もしない。変更後は呼出し側が現在の画面を再表示する。
 void video_set_visual_mode(int mode);
+// 高色ゲーム画面だけ描画commandを保持し、presentでdirty領域をGRB16へ合成する。
+int video_is_highcolor_stage(void);
+void video_present(void);
 
-// いまのステージの地形を BG0 のネームテーブルへ一括で書く。
+// 地形を4bitのBG0、または高色rendererのセル表へ一括で登録する。
 //
 // Why not 原作のように 1 フレーム 1 列ずつ転送するか: NES は
 // ネームテーブルが 2 面 (512x480) しかないので、スクロールに合わせて
@@ -31,15 +34,15 @@ void video_clear_scene(void);
 // G-VRAMの左上320x240はvideoが専有し、同じ画像/色数は上書き箇所だけ復元する。
 // 外部からG-VRAMへ書く、または画面モードを変える場合はvideo_initで再初期化する。
 // 4bit設定は原作ドット絵、16bit設定は新タイトルを表示する。
-// 新タイトルは最初に16色fallbackを表示し、animateのfade=0で高色へ切り替える。
+// 新タイトルはfadeを含め常にGRB16で表示する。
 // 高色側だけCoreS3用の右64pxへ追加背景を描く。
 void video_show_title(void);
 
-// 原作の台詞と顔を表示する。16bit設定では320px幅の高色背景に合成する。
+// 原作の台詞を表示する。16bit設定はタイトルと同じ高色人物・目と陰影文字を合成する。
 // 再表示時は明るさをfade=0へ戻す。
 void video_show_round(int stage);
 void video_show_ending(void);
-// 16bitタイトルはfade中だけ同じ原画の16色版、ラウンドはGRB16を直接暗転する。
+// 16bit設定はタイトルもラウンドもGRB16のまま直接暗転する。
 // 4bit設定のタイトルとラウンドはパレットによる暗転。
 void video_animate_scene(int is_title, int frame, int phase, int fade, int exiting, int selection,
                          int lives);
@@ -47,7 +50,7 @@ void video_animate_scene(int is_title, int frame, int phase, int fade, int exiti
 // タイトルメニューの選択カーソルを置く。
 void video_put_title_cursor(int selection);
 
-// BG0 の横スクロール量を設定する。高色の山背景は画面へ固定したまま。
+// 地形の横スクロール量を設定する。高色の山背景は画面へ固定したまま。
 void video_set_scroll(int32_t scroll_x);
 
 #define VIDEO_POSE_STAND 0
@@ -82,7 +85,7 @@ void video_put_effect(int x, int y, int timer, int flash);
 // 使わなかったスプライトを消す。毎フレーム最後に呼ぶ。
 void video_hide_from(int first_index);
 
-// 4bit設定は原作風BG、16bit設定は固定の高色背景とBG地形を表示する。
+// 4bit設定は原作風BG、16bit設定は地形・人物・文字も高色面へ合成する。
 // 同じ高色背景の全面再転写は省く。
 void video_set_stage(int stage);
 

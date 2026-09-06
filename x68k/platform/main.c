@@ -320,5 +320,6 @@ int main(void)
 #if CALUDE_DEBUG_HUD
         hud_debug_line(&game);
 #endif
+        video_present();
     }
 }

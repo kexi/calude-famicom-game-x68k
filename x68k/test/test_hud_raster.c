@@ -9,6 +9,17 @@
 #include "../platform/hud.h"
 #include "../platform/hw.h"
 
+int video_is_highcolor_stage(void) { return 0; }
+void hc_clear_text(void) {}
+void hc_glyph(int x, int y, const uint8_t rows[8], int color)
+{
+    (void)x;
+    (void)y;
+    (void)rows;
+    (void)color;
+    assert(!"4BIT HUD must not call the direct-color renderer");
+}
+
 #define TEXT_BASE 0xe00000u
 #define PLANE_SIZE 0x20000u
 #define TEXT_SIZE (PLANE_SIZE * 4u)
