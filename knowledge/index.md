@@ -4,6 +4,8 @@ okf_version: "0.2"
 
 # ナレッジ索引
 
+* [ゲーム実行中にJITが弾く命令を実行回数で測る](jit-hot-rejects.md) - JIT不可は実行回数比15.0%。最多はDn対象のANDI/ADDIで3.79%を占め、メモリガード不要なので既存のCMPI/BTSTと同条件で通せる。
+
 * [前景16bit版CoreS3の実機計測](cores3-foreground-measurement.md) - 6条件とも不足率はCPU速度の10MHz比と恒等的に一致。遠景合成が最も重く、背景OFFで描画-20%・CPU+15%。JITと主旋律ブーストを既定ONへ。
 
 * [CoreS3への書き込みと実機での前景16bit動作確認](cores3-device-verified.md) - hash検証つきで書き込み、実機でタイトル・ROUND・ゲーム本編まで到達。65536色前景の実機描画を確認。速度と音質は未計測。
