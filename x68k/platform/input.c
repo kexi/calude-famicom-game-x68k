@@ -73,7 +73,7 @@ static void drain_key_buffer(void)
 }
 
 // X68000 のキーボードのスキャンコード。
-#define KEY_W 0x11
+#define KEY_W 0x12
 #define KEY_A 0x1E
 #define KEY_S 0x1F
 #define KEY_D 0x20

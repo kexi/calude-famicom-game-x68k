@@ -34,12 +34,14 @@
 
 ## 必要環境
 
-- macOS (他OSでも cc65 と make があれば可)
-- [cc65](https://cc65.github.io/) ツールチェーン (ca65 / ld65)
+- flakesを有効にしたNix（macOS / Linux）
+- リポジトリの固定済みNix環境が [cc65](https://cc65.github.io/)（ca65 / ld65）とGNU Makeを、X68000用ツールと一緒に提供します。Homebrewでのインストールは不要です。
 
 ```sh
-brew install cc65
+nix develop
 ```
+
+direnvを使う場合は `direnv allow` で同じ環境が自動的に有効になります。
 
 ## ビルド
 

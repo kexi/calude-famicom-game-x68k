@@ -59,7 +59,7 @@ build-hello:
 #
 # core/ はプラットフォーム非依存、platform/ が X68000 のハードを叩く。
 # アセットは tools/ が生成した .inc.c を混ぜる。
-game_srcs := "x68k/platform/crt0.S x68k/platform/main.c x68k/platform/video.c x68k/platform/input.c x68k/core/level.c x68k/core/player.c x68k/core/enemy.c x68k/core/arrow.c x68k/core/item.c x68k/core/boss.c x68k/core/game.c x68k/core/sound.c x68k/platform/audio.c x68k/platform/hud.c x68k/assets/levels.inc.c x68k/assets/sprites.inc.c x68k/assets/title_highcolor.inc.c"
+game_srcs := "x68k/platform/crt0.S x68k/platform/main.c x68k/platform/video.c x68k/platform/input.c x68k/core/level.c x68k/core/player.c x68k/core/enemy.c x68k/core/arrow.c x68k/core/item.c x68k/core/boss.c x68k/core/game.c x68k/core/sound.c x68k/platform/audio.c x68k/platform/hud.c x68k/assets/levels.inc.c x68k/assets/sprites.inc.c x68k/assets/title_highcolor.inc.c x68k/assets/stage_highcolor.inc.c"
 
 [doc('アセット (レベル・フォント) を生成する')]
 assets:
@@ -69,6 +69,7 @@ assets:
       assets/title_chr.s src/state.s x68k/assets/sprites.inc.c
     PYTHONDONTWRITEBYTECODE=1 python3 x68k/tools/mkaudio.py assets/drums.s x68k/assets/drums.inc.h
     PYTHONDONTWRITEBYTECODE=1 python3 x68k/tools/mkhighcolor.py x68k/assets assets x68k/assets/title_highcolor.inc.c
+    PYTHONDONTWRITEBYTECODE=1 python3 x68k/tools/mkstagehighcolor.py x68k/assets/stage-highcolor-atlas.png x68k/assets/stage_highcolor.inc.c
 
 [doc('ゲーム本体 (GAME.X) をビルドする')]
 build debug="0": assets
@@ -83,6 +84,17 @@ build debug="0": assets
     # 配布libgccの除算ヘルパーは68020命令を含むため混入を禁止する。
     if {{ cross }}-nm {{ build }}/game.elf | rg '__.*(div|mod)'; then exit 1; fi
     python3 x68k/tools/elf2x.py {{ build }}/game.elf {{ build }}/GAME.X
+
+# 通常版をリポジトリ直下へ置き、ROM/OSなしの配布用ゲームディスクを生成する。
+dist: build
+    cp {{ build }}/GAME.X GAME.X
+    mkdir -p x68k/dist
+    PYTHONDONTWRITEBYTECODE=1 python3 x68k/tools/mkgamedisk.py GAME.X x68k/dist/game.xdf
+
+# 配布ファイルを上書きせず、通常ビルドとルートGAME.X・XDFの一致を検証する。
+dist-check: build
+    cmp {{ build }}/GAME.X GAME.X
+    PYTHONDONTWRITEBYTECODE=1 python3 x68k/tools/mkgamedisk.py GAME.X x68k/dist/game.xdf --verify
 
 [doc('ゲームをエミュレータで走らせる')]
 run *ARGS: build
@@ -135,7 +147,7 @@ play: build
 # ビルドしてテストできる。68000 に載せてエミュレータで回すより桁違いに速く、
 # 失敗が「ロジックの誤り」か「載せ方の誤り」かを切り分けられる。
 [doc('core/ のホストネイティブテストを実行する')]
-test:
+test: test-input
     mkdir -p {{ build }}
     clang -std=c17 -O1 -g -Wall -Wextra -Werror \
       -o {{ build }}/test x68k/test/test_main.c x68k/core/level.c \
@@ -144,6 +156,12 @@ test:
       x68k/core/sound.c x68k/assets/levels.inc.c
     ./{{ build }}/test
     PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s x68k/test -p 'test_*.py'
+
+# IOCSスキャンコードとWASD/決定ボタンの対応を、ROMを同梱せず検証する。
+test-input:
+    mkdir -p {{ build }}
+    clang -std=c17 -O1 -g -Wall -Wextra -Werror -o {{ build }}/test-input x68k/test/test_input.c
+    ./{{ build }}/test-input
 
 # 全ステージが本当にクリアできるかを探索で確かめる。
 #
@@ -165,8 +183,8 @@ e2e: (build "1") render-runner
     X68K_STACKCHAN={{ emu }} BUILD_DIR={{ build }} bash x68k/test/e2e.sh
 
 # エミュレータの既存描画器を利用してBG・スプライトも撮影可能にする。
-render-runner:
-    python3 x68k/tools/mkrender_runner.py {{ emu }} {{ build }}
+render-runner WIDTH="256":
+    python3 x68k/tools/mkrender_runner.py {{ emu }} {{ build }} --width '{{ WIDTH }}'
 
 # 撮影した画面の色分布と指定要素の表示を確認する。
 check-shot PPM EXPECT="title":
@@ -196,10 +214,37 @@ screenshot-title-from SOURCE OUT IPL: build render-runner
     python3 x68k/tools/checkppm.py '{{ OUT }}.ppm' --expect title
     sips -s format png '{{ OUT }}.ppm' --out '{{ OUT }}.png'
 
-# 実際の描画コードとエミュレータを接続し、各場面の256x240画像を検証する。
+# 候補ディスクをHuman68kから起動し、START後のゲーム画面を実機と同じ合成器で撮影する。
+screenshot-stage-disk DISK OUT IPL CYCLES="520000000" SELECT="": (render-runner "320")
+    {{ build }}/x68k-render-run --iplrom '{{ IPL }}' \
+      --hdd '{{ DISK }}' --cycles '{{ CYCLES }}' --event-driven \
+      --keys $'game\nqqqqqqqqqqqqqqq{{ SELECT }}\n' --ppm '{{ OUT }}.ppm' > '{{ OUT }}.log' 2>&1
+    sips -s format png '{{ OUT }}.ppm' --out '{{ OUT }}.png'
+
+# 起動HDDと配布FDを分けて接続し、Human68k上のdrive割当を読取専用で調べる。
+probe-game-disk HDD FD OUT IPL DRIVE="C" TRACE="" FD_DRIVE="1": render-runner
+    {{ build }}/x68k-render-run --iplrom '{{ IPL }}' --hdd '{{ HDD }}' \
+      --fd{{ FD_DRIVE }} '{{ FD }}' --fd{{ FD_DRIVE }}-readonly --cycles 650000000 --event-driven \
+      --keys $'dir {{ DRIVE }}:\n' --dump-text {{ TRACE }} > '{{ OUT }}.log' 2>&1
+
+# 明示したFD上のGAME.Xを起動し、HDD内のゲームと取り違えずタイトルを撮影する。
+screenshot-game-disk HDD FD OUT IPL DRIVE="C" FD_DRIVE="1": (render-runner "320")
+    {{ build }}/x68k-render-run --iplrom '{{ IPL }}' --hdd '{{ HDD }}' \
+      --fd{{ FD_DRIVE }} '{{ FD }}' --fd{{ FD_DRIVE }}-readonly --cycles 650000000 --event-driven \
+      --keys $'{{ DRIVE }}:game\n' --dump-text --ppm '{{ OUT }}.ppm' > '{{ OUT }}.log' 2>&1
+    sips -s format png '{{ OUT }}.ppm' --out '{{ OUT }}.png'
+
+# 起動コマンドとゲーム操作の時刻を分離し、実入力でモード選択・画面遷移を確認する。
+screenshot-input-disk DISK OUT IPL SCRIPT CYCLES="560000000": (render-runner "320")
+    {{ build }}/x68k-render-run --iplrom '{{ IPL }}' --hdd '{{ DISK }}' \
+      --cycles '{{ CYCLES }}' --event-driven --keys $'game\n' \
+      --input-script '{{ SCRIPT }}' --ppm '{{ OUT }}.ppm' > '{{ OUT }}.log' 2>&1
+    sips -s format png '{{ OUT }}.ppm' --out '{{ OUT }}.png'
+
+# 実際の描画コードとエミュレータを接続し、各場面の256/320x240画像を検証する。
 test-video: assets
     mkdir -p {{ build }}/visual
-    for f in x68k/platform/video.c x68k/platform/hud.c x68k/platform/audio.c x68k/core/level.c x68k/assets/levels.inc.c x68k/assets/sprites.inc.c x68k/assets/title_highcolor.inc.c; do \
+    for f in x68k/platform/video.c x68k/platform/hud.c x68k/platform/audio.c x68k/core/level.c x68k/assets/levels.inc.c x68k/assets/sprites.inc.c x68k/assets/title_highcolor.inc.c x68k/assets/stage_highcolor.inc.c; do \
       clang -O1 -DCALUDE_HOST_VIDEO -c $f -o {{ build }}/visual/$(basename $f).o || exit 1; \
     done
     clang++ -std=c++17 -O1 -DCALUDE_HOST_VIDEO -I{{ emu }}/src/x68k/core -I{{ emu }}/src/x68k/core/cpu \

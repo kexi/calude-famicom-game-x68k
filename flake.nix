@@ -41,6 +41,10 @@
       {
         devShells.default = pkgs.mkShell {
           packages = [
+            # --- NES版のアセンブル・リンク（Homebrewに依存させない） ---
+            pkgs.cc65
+            pkgs.gnumake
+
             # --- 68000 クロスコンパイル ---
             m68kPkgs.gcc
             m68kPkgs.binutils

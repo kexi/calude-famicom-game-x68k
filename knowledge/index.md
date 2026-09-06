@@ -4,6 +4,16 @@ okf_version: "0.2"
 
 # ナレッジ索引
 
+* [4bit・16bit表示モードの選択と継承](graphics-mode-selection.md) - 4bit/16bit選択と高色ROUNDを実装し、Wキー対応を修正。全画素回帰・実ゲスト起動・配布物一致・CoreS3書込みと撮影を検証。
+
+* [NESビルドツールのNix管理](nes-nix-toolchain.md) - cc65とGNU Makeを既存devShellへ追加し、Homebrewなしで原作NESの再ビルドを検証。
+
+* [ゲーム単体ディスクの配布](game-distribution.md) - GAME.Xのみの非起動XDFを自作し構造を検証。現行エミュレータのFD読込みは媒体エラーで未達。
+
+* [ゲーム遠景の65536色化](stage-highcolor.md) - 全4面の山と空を固定の直接色背景へ変更。ホスト描画・CoreS3への書込み・実機ゲーム画面を検証し、性能比較は未確認。
+
+* [タイトル右64pxの背景描き足し](title-right-extension.md) - 既存256pxを完全保持し、CoreS3の右64pxへ森と岩場を追加する。CRTC・音声・ゲーム中の倍率は変更しない。
+
 * [65536色モードのタイトル](title-highcolor.md) - 多色タイトルのホスト描画・CoreS3書き込み・実機タイトルからゲームへの遷移を検証。音声供給不足と聴感確認は残る。
 
 * [タイトルのX68000表記とCoreS3右余白](title-x68000-label.md) - X68000表記をタイトル下部へ追加しホスト起動・描画を検証。CoreS3の右64pxは等倍左寄せによるゲーム領域外表示で、表示変更・実機再書き込みは未実施。

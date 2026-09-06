@@ -95,6 +95,30 @@ class MakeSpritesTest(unittest.TestCase):
         self.assertEqual(len(palette), 16)
         self.assertEqual(palette[:4], bytes((0x0F, 0x37, 0x17, 0x18)))
 
+    def test_four_menu_rows_preserve_original_font_and_every_pixel_outside_their_bands(self) -> None:
+        assets = Path(__file__).parents[2] / "assets"
+        sprites = mksprites.parse_ca65_data(assets / "sprites.s")
+        original = mksprites.title_bitmap(
+            mksprites.parse_ca65_data(assets / "title_chr.s"),
+            mksprites.parse_label_bytes(assets / "title_screen.s", "title_nt", 1024),
+        )
+        result = mksprites.title_menu(original, sprites)
+        labels = ("START 4BIT COLOR", "START 16BIT COLOR", "CONTINUE", "OPTION")
+        expected = [[(original[y][x // 2] >> (0 if x & 1 else 4)) & 15
+                     for x in range(256)] for y in range(240)]
+        for top, label in zip((123, 137, 151, 165), labels):
+            for y in range(top, top + 8):
+                expected[y][12:160] = [0] * 148
+            for index, char in enumerate(label):
+                tile = (ord(char) + 0x60) * 16
+                for dy in range(8):
+                    mask = sprites[tile + dy] | sprites[tile + 8 + dy]
+                    for dx in range(8):
+                        expected[top + dy][24 + index * 8 + dx] = 4 if mask & (128 >> dx) else 0
+        actual = [[(result[y][x // 2] >> (0 if x & 1 else 4)) & 15
+                   for x in range(256)] for y in range(240)]
+        self.assertEqual(actual, expected)
+
     def test_title_platform_label_matches_original_font_at_fixed_position(self) -> None:
         source = Path(__file__).parents[2] / "assets" / "sprites.s"
         sprites = mksprites.parse_ca65_data(source)

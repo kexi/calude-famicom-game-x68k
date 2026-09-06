@@ -837,6 +837,8 @@ static void test_title_waits_for_start(void)
     Game g;
     game_init(&g);
     CHECK_EQ(g.state, GS_TITLE);
+    CHECK_EQ(g.visual_mode, 1);
+    CHECK_EQ(g.title_selection, 1);
 
     game_update(&g, 0);
     CHECK_EQ(g.state, GS_TITLE);
@@ -854,32 +856,218 @@ static void test_title_waits_for_start(void)
 
 static void test_title_menu_selection(void)
 {
-    printf("進行: タイトルのメニューを上下移動して決定する\n");
+    printf("進行: 4行メニューは端で止まり、押しっぱなしとOPTIONでは開始しない\n");
 
     Game g;
     game_init(&g);
-    g.stage = 2;
+    game_update(&g, BTN_UP | BTN_A);
+    CHECK_EQ(g.title_selection, 1);
+    CHECK_EQ(g.visual_mode, 1);
+    CHECK_EQ(g.title_exit, 0);
     for (int i = 0; i < 56; ++i) game_update(&g, 0);
 
     game_update(&g, BTN_DOWN);
-    CHECK_EQ(g.title_selection, 1);
-    game_update(&g, 0);
+    CHECK_EQ(g.title_selection, 2);
     game_update(&g, BTN_DOWN);
     CHECK_EQ(g.title_selection, 2);
     game_update(&g, 0);
+    game_update(&g, BTN_DOWN);
+    CHECK_EQ(g.title_selection, 3);
+    game_update(&g, 0);
+    game_update(&g, BTN_DOWN);
+    CHECK_EQ(g.title_selection, 3);
+    game_update(&g, 0);
     game_update(&g, BTN_A);
     CHECK_EQ(g.state, GS_TITLE);  // OPTIONは原作どおり飾り。
+    CHECK_EQ(g.title_exit, 0);
+    CHECK_EQ(g.visual_mode, 1);
+    CHECK_EQ(g.sound.playing, 1);
+    game_update(&g, 0);
+    game_update(&g, BTN_START);
+    CHECK_EQ(g.title_exit, 0);
 
+    for (int row = 2; row >= 0; --row)
+    {
+        game_update(&g, 0);
+        game_update(&g, BTN_UP);
+        CHECK_EQ(g.title_selection, row);
+        CHECK_EQ(g.visual_mode, 1);  // 選択位置だけでは表示モードを変えない。
+        game_update(&g, BTN_UP);
+        CHECK_EQ(g.title_selection, row);
+    }
     game_update(&g, 0);
     game_update(&g, BTN_UP);
-    CHECK_EQ(g.title_selection, 1);
+    CHECK_EQ(g.title_selection, 0);
     game_update(&g, 0);
-    game_update(&g, BTN_A);
-    for (int i = 0; i < 109; ++i) game_update(&g, 0);
-    CHECK_EQ(g.state, GS_ROUND);
-    CHECK_EQ(g.stage, 2);
-    CHECK_EQ(g.lives, 3);
-    CHECK_EQ(g.score, 0);
+    game_update(&g, BTN_UP | BTN_DOWN);
+    CHECK_EQ(g.title_selection, 0);
+    CHECK_EQ(g.visual_mode, 1);
+}
+
+static void test_title_start_visual_modes(void)
+{
+    printf("進行: 両STARTは決定時に表示モードを選び、1-1から新しく始める\n");
+    for (int mode = 0; mode < 2; ++mode)
+    {
+        Game g;
+        game_init(&g);
+        g.visual_mode = (uint8_t)(1 - mode);
+        g.title_selection = (uint8_t)mode;
+        g.stage = 2;
+        g.lives = 1;
+        g.score = 321;
+        g.score_tens = 4;
+        g.next_extend = 400;
+        g.checkpoint = 1;
+        g.coins = 29;
+        for (int i = 0; i < 56; ++i) game_update(&g, 0);
+        CHECK_EQ(g.visual_mode, 1 - mode);
+
+        game_update(&g, mode == 0 ? BTN_A : BTN_START);
+        CHECK_EQ(g.visual_mode, mode);
+        CHECK_EQ(g.title_exit, 1);
+        CHECK_EQ(g.state, GS_TITLE);
+        CHECK_EQ(g.sound.playing, 0);
+        CHECK_EQ(g.sound.sfx, SFX_START);
+        for (int i = 0; i < 108; ++i) game_update(&g, BTN_DOWN);
+        CHECK_EQ(g.state, GS_TITLE);
+        CHECK_EQ(g.title_selection, mode);
+        CHECK_EQ(g.visual_mode, mode);
+        game_update(&g, 0);
+        CHECK_EQ(g.state, GS_ROUND);
+        CHECK_EQ(g.state_timer, 150);
+        CHECK_EQ(g.stage, 0);
+        CHECK_EQ(g.lives, 3);
+        CHECK_EQ(g.score, 0);
+        CHECK_EQ(g.score_tens, 0);
+        CHECK_EQ(g.next_extend, 100);
+        CHECK_EQ(g.checkpoint, 0);
+        CHECK_EQ(g.coins, 0);
+        CHECK_EQ(g.visual_mode, mode);
+    }
+}
+
+static void test_title_continue_visual_modes(void)
+{
+    printf("進行: CONTINUEは面と表示モードを保持して残機と得点を戻す\n");
+    for (int mode = 0; mode < 2; ++mode)
+    {
+        Game g;
+        game_init(&g);
+        g.visual_mode = (uint8_t)mode;
+        g.stage = 2;
+        g.lives = 1;
+        g.score = 123;
+        g.title_fade = 0;
+        game_update(&g, BTN_DOWN);
+        CHECK_EQ(g.title_selection, 2);
+        CHECK_EQ(g.visual_mode, mode);
+        game_update(&g, BTN_A);
+        CHECK_EQ(g.title_exit, 1);
+        CHECK_EQ(g.visual_mode, mode);
+        for (int i = 0; i < 109; ++i) game_update(&g, 0);
+        CHECK_EQ(g.state, GS_ROUND);
+        CHECK_EQ(g.stage, 2);
+        CHECK_EQ(g.visual_mode, mode);
+        CHECK_EQ(g.lives, 3);
+        CHECK_EQ(g.score, 0);
+    }
+}
+
+static void test_visual_mode_survives_scene_transitions(void)
+{
+    printf("進行: 表示モードはミス・次面・タイトル復帰で保持し、新規初期化で戻す\n");
+    for (int mode = 0; mode < 2; ++mode)
+    {
+        Game g;
+        game_start_at(&g, 1);
+        CHECK_EQ(g.visual_mode, 1);
+        g.visual_mode = (uint8_t)mode;
+        g.state = GS_DYING;
+        g.state_timer = 1;
+        game_update(&g, 0);
+        CHECK_EQ(g.state, GS_ROUND);
+        CHECK_EQ(g.stage, 1);
+        CHECK_EQ(g.visual_mode, mode);
+        g.state = GS_CLEAR;
+        g.state_timer = 1;
+        game_update(&g, 0);
+        CHECK_EQ(g.state, GS_ROUND);
+        CHECK_EQ(g.stage, 2);
+        CHECK_EQ(g.visual_mode, mode);
+        g.state = GS_GAMEOVER;
+        g.state_timer = 1;
+        game_update(&g, 0);
+        CHECK_EQ(g.state, GS_TITLE);
+        CHECK_EQ(g.stage, 2);
+        CHECK_EQ(g.visual_mode, mode);
+        CHECK_EQ(g.title_selection, mode);
+
+        g.stage = NUM_STAGES - 1;
+        g.state = GS_CLEAR;
+        g.state_timer = 1;
+        game_update(&g, 0);
+        CHECK_EQ(g.state, GS_ENDING);
+        CHECK_EQ(g.visual_mode, mode);
+        game_update(&g, BTN_START);
+        CHECK_EQ(g.state, GS_TITLE);
+        CHECK_EQ(g.visual_mode, mode);
+        CHECK_EQ(g.title_selection, mode);
+        for (int i = 0; i < 64; ++i) game_update(&g, BTN_START);
+        CHECK_EQ(g.title_fade, 0);
+        CHECK_EQ(g.title_exit, 0);
+        CHECK_EQ(g.visual_mode, mode);
+        game_update(&g, 0);
+        game_update(&g, BTN_START);
+        CHECK_EQ(g.title_exit, 1);
+
+        game_init(&g);
+        CHECK_EQ(g.visual_mode, 1);
+        CHECK_EQ(g.title_selection, 1);
+    }
+}
+
+static void test_visual_modes_preserve_gameplay_and_sound(void)
+{
+    printf("進行: 2表示モードの同入力は全ゲーム状態とSoundFrameが一致する\n");
+    for (int stage = 0; stage < NUM_STAGES; ++stage)
+    {
+        Game original;
+        Game highcolor;
+        // 未使用領域や構造体paddingも0で揃え、状態の差分だけを比較する。
+        memset(&original, 0, sizeof(original));
+        memset(&highcolor, 0, sizeof(highcolor));
+        game_start_at(&original, stage);
+        game_start_at(&highcolor, stage);
+        original.visual_mode = 0;
+        original.title_selection = 0;
+
+        for (int frame = 0; frame < 1200; ++frame)
+        {
+            uint8_t buttons = BTN_RIGHT;
+            const int jumping = (frame % 64) < 30;
+            const int shooting = (frame % 11) == 0;
+            const int pause_edge = frame == 200 || frame == 230;
+            if (jumping) buttons |= BTN_A;
+            if (shooting) buttons |= BTN_B;
+            if (pause_edge) buttons |= BTN_START;
+            SoundFrame original_sound;
+            SoundFrame highcolor_sound;
+            level_set_stage(original.stage);
+            game_update_with_sound(&original, buttons, &original_sound);
+            level_set_stage(highcolor.stage);
+            game_update_with_sound(&highcolor, buttons, &highcolor_sound);
+            CHECK_EQ(original.visual_mode, 0);
+            CHECK_EQ(highcolor.visual_mode, 1);
+            CHECK(memcmp(&original_sound, &highcolor_sound, sizeof(original_sound)) == 0);
+
+            Game normalized;
+            memcpy(&normalized, &highcolor, sizeof(normalized));
+            normalized.visual_mode = original.visual_mode;
+            normalized.title_selection = original.title_selection;
+            CHECK(memcmp(&original, &normalized, sizeof(original)) == 0);
+        }
+    }
 }
 
 // 1-4 をクリアしたらエンディングへ進むこと。
@@ -1516,6 +1704,10 @@ int main(void)
     test_clear_advances_stage();
     test_title_waits_for_start();
     test_title_menu_selection();
+    test_title_start_visual_modes();
+    test_title_continue_visual_modes();
+    test_visual_mode_survives_scene_transitions();
+    test_visual_modes_preserve_gameplay_and_sound();
     test_last_stage_goes_to_ending();
     test_pause_freezes_world();
     test_death_costs_a_life();

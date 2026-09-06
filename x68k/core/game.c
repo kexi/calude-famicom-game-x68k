@@ -100,7 +100,8 @@ void game_init(Game *g)
     g->next_extend = EXTEND_STEP;
     g->checkpoint = 0;
     g->paused = 0;
-    g->title_selection = 0;
+    g->visual_mode = VISUAL_MODE_65536_COLOR;
+    g->title_selection = TITLE_START_65536_COLOR;
     g->title_fade = 7;
     g->title_exit = 0;
     g->blink_again = 0;
@@ -116,6 +117,15 @@ void game_init(Game *g)
     g->state_timer = 0;
     g->sound.song = 1;
     g->sound.fade = 0;
+}
+
+static void return_to_title(Game *g)
+{
+    const uint8_t visual_mode = g->visual_mode;
+    game_init(g);
+    g->visual_mode = visual_mode;
+    g->title_selection =
+        visual_mode == VISUAL_MODE_16_COLOR ? TITLE_START_16_COLOR : TITLE_START_65536_COLOR;
 }
 
 int32_t game_scroll(const Game *g) { return camera_scroll_for(g->player.world_x); }
@@ -186,7 +196,7 @@ static void update_state_timer(Game *g)
         case GS_GAMEOVER:
         {
             const int continue_stage = g->stage;
-            game_init(g);
+            return_to_title(g);
             g->stage = continue_stage;
             break;
         }
@@ -255,7 +265,9 @@ void game_update_with_sound(Game *g, uint8_t buttons, SoundFrame *sound)
             const int exit_finished = g->title_exit >= 110;
             if (exit_finished)
             {
-                g->stage = g->title_selection == 0 ? 0 : g->stage;
+                const int is_new_game = g->title_selection == TITLE_START_16_COLOR ||
+                                        g->title_selection == TITLE_START_65536_COLOR;
+                if (is_new_game) g->stage = 0;
                 g->lives = 3;
                 g->score = 0;
                 g->score_tens = 0;
@@ -302,17 +314,23 @@ void game_update_with_sound(Game *g, uint8_t buttons, SoundFrame *sound)
         }
         const int down_pressed = (buttons & BTN_DOWN) != 0 && (g->prev_buttons & BTN_DOWN) == 0;
         const int up_pressed = (buttons & BTN_UP) != 0 && (g->prev_buttons & BTN_UP) == 0;
-        if (down_pressed && g->title_selection < 2)
+        const int can_move_down = down_pressed && g->title_selection < TITLE_OPTION;
+        if (can_move_down)
         {
             ++g->title_selection;
         }
-        if (up_pressed && g->title_selection > 0)
+        const int can_move_up = up_pressed && g->title_selection > TITLE_START_16_COLOR;
+        if (can_move_up)
         {
             --g->title_selection;
         }
-        const int is_option = g->title_selection == 2;
-        if (confirm_pressed && !is_option)
+        const int confirm_game = confirm_pressed && g->title_selection != TITLE_OPTION;
+        if (confirm_game)
         {
+            const int start_16_color = g->title_selection == TITLE_START_16_COLOR;
+            const int start_65536_color = g->title_selection == TITLE_START_65536_COLOR;
+            if (start_16_color) g->visual_mode = VISUAL_MODE_16_COLOR;
+            if (start_65536_color) g->visual_mode = VISUAL_MODE_65536_COLOR;
             g->title_exit = 1;
             g->sound.playing = 0;
             sound_play_sfx(&g->sound, SFX_START);
@@ -325,7 +343,7 @@ void game_update_with_sound(Game *g, uint8_t buttons, SoundFrame *sound)
     {
         if (start_pressed)
         {
-            game_init(g);
+            return_to_title(g);
             // 押しっぱなしのSTARTでタイトルを素通りしないよう、現在の
             // 入力を引き継ぐ。いったん離してから次のゲームを始める。
             g->prev_buttons = buttons;

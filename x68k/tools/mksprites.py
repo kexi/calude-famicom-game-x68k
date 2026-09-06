@@ -44,6 +44,11 @@ ENEMY_COLORS = (0, 4, 5, 6)
 BAT_COLORS = (0, 7, 8, 6)
 STONE_COLORS = (0, 9, 10, 11)
 BG_COLORS = (0, 12, 13, 14)
+TITLE_MENU_X = 12
+TITLE_MENU_TEXT_X = 24
+TITLE_MENU_RIGHT = 160
+TITLE_MENU_Y = (123, 137, 151, 165)
+TITLE_MENU_LABELS = ("START 4BIT COLOR", "START 16BIT COLOR", "CONTINUE", "OPTION")
 
 
 def parse_value(token: str) -> int:
@@ -325,6 +330,32 @@ def title_platform_label(title: list[bytes], sprite_chr: bytes) -> list[bytes]:
     return [bytes(row) for row in bitmap]
 
 
+def title_menu_rows(sprite_chr: bytes) -> list[list[bytearray]]:
+    """人物領域を避けた4行の黒背景と、原作8px字形の白文字を生成する。"""
+    menus = []
+    for label in TITLE_MENU_LABELS:
+        rows = [bytearray(TITLE_MENU_RIGHT - TITLE_MENU_X) for _ in range(8)]
+        for index, char in enumerate(label):
+            glyph = decode_tile(sprite_chr, ord(char) + 0x60)
+            for y, row in enumerate(glyph):
+                for x, color in enumerate(row):
+                    rows[y][TITLE_MENU_TEXT_X - TITLE_MENU_X + index * 8 + x] = int(color != 0)
+        menus.append(rows)
+    return menus
+
+
+def title_menu(title: list[bytes], sprite_chr: bytes) -> list[bytes]:
+    bitmap = [bytearray(row) for row in title]
+    # TVRAMだと別管理のfadeや残像が必要になるので、両色数とも素材へ焼き込む。
+    for top, rows in zip(TITLE_MENU_Y, title_menu_rows(sprite_chr)):
+        for dy, row in enumerate(rows):
+            for dx, ink in enumerate(row):
+                x, y = TITLE_MENU_X + dx, top + dy
+                shift = 0 if x & 1 else 4
+                bitmap[y][x // 2] = (bitmap[y][x // 2] & ~(15 << shift)) | ((4 if ink else 0) << shift)
+    return [bytes(row) for row in bitmap]
+
+
 def round_bitmap(sprite_chr: bytes, title: list[bytes], dialog: bytes, stage: int = 0) -> list[bytes]:
     """原作のラウンド画面を256x240・4bppの走査線へ組み立てる。"""
     pixels = [bytearray(256) for _ in range(240)]
@@ -518,7 +549,7 @@ def main() -> int:
         background,
         mountain_map,
         game_palettes(),
-        title_platform_label(title, sprite_chr),
+        title_menu(title_platform_label(title, sprite_chr), sprite_chr),
         rounds,
         cursor,
         title_palette,

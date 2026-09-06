@@ -8,6 +8,7 @@ import struct
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 import zlib
 from pathlib import Path
 
@@ -229,8 +230,9 @@ class HighColorTitleAssetsTest(unittest.TestCase):
         palette = sprites_tool.parse_label_bytes(ROOT / "assets" / "title_screen.s",
                                                  "title_img_palette", 16)
         platform_color = mkhighcolor.grb16(sprites_tool.NES_RGB[palette[1]])
-        labels = ((60, 123, "START", 0xFFFF), (60, 137, "CONTINUE", 0xFFFF),
-                  (60, 151, "OPTION", 0xFFFF), (52, 228, "X68000", platform_color))
+        labels = ((24, 123, "START 4BIT COLOR", 0xFFFF), (24, 137, "START 16BIT COLOR", 0xFFFF),
+                  (24, 151, "CONTINUE", 0xFFFF), (24, 165, "OPTION", 0xFFFF),
+                  (52, 228, "X68000", platform_color))
         for origin_x, origin_y, text, color in labels:
             with self.subTest(text=text):
                 for index, char in enumerate(text):
@@ -304,6 +306,70 @@ class HighColorTitleAssetsTest(unittest.TestCase):
         self.assertLessEqual(palette_nine, set(self.logo_positions))
         for frame in self.eyes_fallback:
             self.assertNotIn(9, {value for row in unpack_indices(frame) for value in row})
+
+    def test_right_extension_does_not_change_any_existing_generated_array(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "base.inc.c"
+            extended = Path(temporary) / "extended.inc.c"
+            mkhighcolor.write_c(path, self.direct, self.fallback, self.eyes, self.eyes_fallback,
+                                self.logo_positions, self.logo_colors)
+            right, fallback = mkhighcolor.right_assets(ROOT / "x68k/assets", ROOT / "assets")
+            mkhighcolor.write_c(extended, self.direct, self.fallback, self.eyes, self.eyes_fallback,
+                                self.logo_positions, self.logo_colors,
+                                right=right, right_fallback=fallback)
+            self.assertTrue(extended.read_bytes().startswith(path.read_bytes()))
+
+    def test_menu_preserves_portrait_logo_eyes_and_all_art_outside_ui_regions(self) -> None:
+        original = mkhighcolor.resize_nearest(*mkhighcolor.read_png(self.paths[0]))
+        for y in range(240):
+            for x in range(256):
+                is_menu = 12 <= x < 160 and any(top <= y < top + 8 for top in (123, 137, 151, 165))
+                is_copyright = 32 <= x < 120 and 214 <= y < 222
+                is_platform = 52 <= x < 100 and 228 <= y < 236
+                is_ui = is_menu or is_copyright or is_platform
+                if not is_ui:
+                    self.assertEqual(self.direct[y][x], mkhighcolor.grb16(original[y][x]))
+
+
+class RightTitleExtensionTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.assets = ROOT / "x68k" / "assets"
+        cls.path = cls.assets / "title-highcolor-outpaint.png"
+        cls.before_hash = hashlib.sha256(cls.path.read_bytes()).hexdigest()
+        cls.direct, cls.fallback = mkhighcolor.right_assets(cls.assets, ROOT / "assets")
+
+    def test_extension_fills_64_by_240_without_modifying_its_source(self) -> None:
+        self.assertEqual(len(self.direct), 240)
+        self.assertEqual({len(row) for row in self.direct}, {64})
+        self.assertEqual(len(self.fallback), 240)
+        self.assertEqual({len(row) for row in self.fallback}, {32})
+        self.assertGreater(len({word for row in self.direct for word in row}), 256)
+        self.assertTrue(any(row[63] != 0 for row in self.direct))
+        self.assertEqual(hashlib.sha256(self.path.read_bytes()).hexdigest(), self.before_hash)
+
+    def test_background_never_uses_logo_or_white_ui_palette_slots(self) -> None:
+        indices = {value for row in unpack_indices(self.fallback) for value in row}
+        self.assertNotIn(9, indices)
+        self.assertNotIn(4, indices)
+        self.assertTrue(all(0 <= value < 16 for value in indices))
+
+    def test_only_rightmost_fifth_is_sampled_without_stretching_the_left(self) -> None:
+        pixels = [((x * 3) % 256, (y * 5) % 256, (x + y) % 256)
+                  for y in range(480) for x in range(640)]
+        with patch.object(mkhighcolor, "read_png", return_value=(640, 480, pixels)):
+            actual, _ = mkhighcolor.right_assets(self.assets, ROOT / "assets")
+        for y in range(240):
+            for x in range(64):
+                red, green, blue = pixels[(y * 2 + 1) * 640 + (x + 256) * 2 + 1]
+                expected = ((green // 8) * 2048 + (red // 8) * 64
+                            + (blue // 8) * 2 + (green // 4) % 2)
+                self.assertEqual(actual[y][x], expected)
+
+    def test_rejects_outpaint_with_wrong_aspect_ratio(self) -> None:
+        with patch.object(mkhighcolor, "read_png", return_value=(256, 240, [])):
+            with self.assertRaisesRegex(ValueError, "4:3"):
+                mkhighcolor.right_assets(self.assets, ROOT / "assets")
 
 
 if __name__ == "__main__":

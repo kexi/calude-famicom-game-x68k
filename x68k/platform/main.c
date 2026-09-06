@@ -122,12 +122,14 @@ int main(void)
     game_init(&game);
 
     video_init();
+    video_set_visual_mode(game.visual_mode);
     audio_init();
     hud_clear();
     video_show_title();
 
     int shown_stage = game.stage;
     int shown_state = game.state;
+    int shown_visual_mode = game.visual_mode;
     uint8_t player_animation_timer = 0;
     static uint8_t shown_coins[8];
 
@@ -137,6 +139,12 @@ int main(void)
 
         static SoundFrame sound;
         game_update_with_sound(&game, buttons, &sound);
+        const int visual_mode_changed = game.visual_mode != shown_visual_mode;
+        if (visual_mode_changed)
+        {
+            video_set_visual_mode(game.visual_mode);
+            shown_visual_mode = game.visual_mode;
+        }
         const int is_static_scene =
             game.state == GS_TITLE || game.state == GS_ROUND || game.state == GS_ENDING;
 
@@ -163,6 +171,11 @@ int main(void)
                 video_set_stage(game.stage);
             }
             shown_state = game.state;
+        }
+        else
+        {
+            const int refresh_title = visual_mode_changed && game.state == GS_TITLE;
+            if (refresh_title) video_show_title();
         }
 
         // ステージが変わったら BG を組み直す。

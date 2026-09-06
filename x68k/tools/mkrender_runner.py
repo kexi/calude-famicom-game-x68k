@@ -13,10 +13,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("emulator", type=Path)
     parser.add_argument("build", type=Path)
+    parser.add_argument("--width", type=int, choices=(256, 320), default=256)
     args = parser.parse_args()
     source = (args.emulator / "host/main.cpp").read_text()
-    # コンソール全体768x512ではなく、ゲーム本来の256x240領域を撮影する。
-    for before, after in (("constexpr x68k::u32 kWidth = 768;", "constexpr x68k::u32 kWidth = 256;"),
+    # 通常はゲーム本来の256px、CoreS3同等のviewport確認時だけ320pxを合成する。
+    for before, after in (("constexpr x68k::u32 kWidth = 768;", f"constexpr x68k::u32 kWidth = {args.width};"),
                           ("constexpr x68k::u32 kHeight = 512;", "constexpr x68k::u32 kHeight = 240;")):
         if source.count(before) != 1:
             raise ValueError("エミュレータの撮影サイズ定義が変わりました")
@@ -24,18 +25,13 @@ def main() -> None:
     marker = "        if (writePpm(ppmPath, pixels.data(), kWidth, kHeight))"
     if source.count(marker) != 1:
         raise ValueError("エミュレータのPPM出力箇所が変わりました。合成位置を再確認してください")
-    source = '#include "video/sprite_raster.h"\n' + source.replace(marker, """
+    source = '#include "video/compositor.h"\n' + source.replace(marker, """
         if (!textOnly)
         {
-            x68k::SpriteRaster::renderPlane(machine.sprite(), machine.video(),
-                0, 0, kWidth, kHeight, pixels.data(), kWidth);
-            for (unsigned y = 0; y < kHeight; ++y)
-                for (unsigned x = 0; x < kWidth; ++x)
-                {
-                    const auto index = x68k::TextRaster::pixelIndex(textVram.data(), x, y);
-                    if (index)
-                        pixels[y * kWidth + x] = x68k::VideoController::toRgb565(machine.video().textPalette(index));
-                }
+            // 手組み合成では実機とHUD/BGの重ね順が変わるため、同じ合成器を使う。
+            x68k::Compositor::render(graphicVram.data(), textVram.data(),
+                &machine.sprite(), machine.video(), 0, 0, kWidth, kHeight,
+                pixels.data(), kWidth);
         }
 """ + marker)
     args.build.mkdir(parents=True, exist_ok=True)

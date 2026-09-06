@@ -29,6 +29,15 @@
 #define GS_ENDING 5
 #define GS_ROUND 6
 
+// 表示だけを切り替え、ゲームのルールと音は共通にする。
+#define VISUAL_MODE_16_COLOR 0
+#define VISUAL_MODE_65536_COLOR 1
+
+#define TITLE_START_16_COLOR 0
+#define TITLE_START_65536_COLOR 1
+#define TITLE_CONTINUE 2
+#define TITLE_OPTION 3
+
 // 演出の長さ (フレーム)。
 #define STATE_TIME_CLEAR 240
 #define STATE_TIME_DEAD 60
@@ -53,6 +62,7 @@ typedef struct
     uint32_t next_extend;
     uint8_t checkpoint;
     uint8_t paused;
+    uint8_t visual_mode;
     uint8_t title_selection;
     uint8_t title_fade;
     uint8_t title_exit;
