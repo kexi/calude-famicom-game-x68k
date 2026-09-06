@@ -1,15 +1,20 @@
 ---
 type: Attested Computation
 title: スプライト属性ワードの反転bitが実機と不一致
-description: ゲームとエミュレータの双方が反転にbit8/9を使い、実機のパレットblockを汚していた。両方をbit14/15へ是正し双方に回帰試験を追加。e2eも通したが実機確認は未達。
+description: ゲームとエミュレータの双方が反転にbit8/9を使い、実機のパレットblockを汚していた。両方をbit14/15へ是正し、4bit経路の実機で反転と色の両方を確認した。
 status: draft
 generated: { by: claude, at: 2026-09-06T00:00:00Z }
 verified:
   - { by: process:test-video-sprite-flip, at: 2026-09-06T00:00:00Z }
   - { by: claude:mame-source-crosscheck, at: 2026-09-06T00:00:00Z }
+  - { by: process:device-4bit-hflip-capture, at: 2026-09-06T00:00:00Z }
   - { by: process:emulator-sprite-tests, at: 2026-09-06T00:00:00Z }
   - { by: process:game-video-sprite-flip, at: 2026-09-06T00:00:00Z }
 sources:
+  - id: shot-hflip
+    resource: ../docs/device/cores3-4bit-hflip.png
+  - id: shot-4bit
+    resource: ../docs/device/cores3-4bit-gameplay.png
   - id: game-video
     resource: ../x68k/platform/video.c
   - id: hw
@@ -101,10 +106,23 @@ facing=0/1で描き、CYNTHIA実装が実際に鏡像を出すかを画素比較
 
 # 未実施・残る作業
 
-- 実機のCoreS3でタイトル・ROUND・ゲーム本編まで動くことは確認した
-  ([CoreS3への書き込みと実機での前景16bit動作確認](cores3-device-verified.md))。
-  ただし確認したのは65536色経路で、そちらは属性ワードを使わないソフト合成である。
-  **反転bitそのものを実機で確かめたわけではない。** 根拠はMAMEのソースとの照合。
+# 実機での確認 (2026-09-06)
+
+反転bitを実際に通る4bit経路を実機で確かめた。タイトルで`START 4BIT COLOR`を
+選んでゲームへ入り、`d`を押しっぱなしにした状態(=`facing`が立ち、
+`put_sprite`が`SPR_ATTR_HFLIP`を書く)でLCDを取得した。[^shot-hflip][^shot-4bit]
+
+- 主人公が右向きに反転して描かれている。形が鏡像になっている。
+- 使われている色を数えると、髪(230,93,16)・服(255,60,0)・肌(246,214,180)・
+  明部(255,230,172)・差し色(255,93,156)。**いずれも原作NESパレットの
+  index 23/22/54/55/37 と完全一致する。**
+
+後者が決め手になる。旧実装の`$0100`は実機ではパレットブロックのbit0なので、
+反転を書くたびにパレット番号が1へ変わり、別の色で描かれるはずだった。
+色が意図どおりということは、**反転bitがパレット領域を侵していない**ことの
+実機での証拠である。
+
+したがって「形が反転する」と「色が変わらない」の両方を実機で確認した。
 - `just e2e`は当初FAILしていたが、原因は反転bitではなく入力の時刻ずれだった。
   修正後は全項目成功し、4bitモードで主人公・地形・HUD・ジャンプ・右移動を
   実際に動かして確認している。経緯は
@@ -121,3 +139,6 @@ facing=0/1で描き、CYNTHIA実装が実際に鏡像を出すかを画素比較
 [^emulator-sprite-raster]: `sources.emulator-sprite-raster`
 [^emulator-sprite-dev]: `sources.emulator-sprite-dev`
 [^mame-video]: `sources.mame-video`
+
+[^shot-hflip]: `sources.shot-hflip`
+[^shot-4bit]: `sources.shot-4bit`
