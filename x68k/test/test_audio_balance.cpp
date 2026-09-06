@@ -311,7 +311,8 @@ static void test_melody_timbre()
             // 金管風FMには偶数倍音も含まれ、正弦波/以前の矩形近似とは異なる。
             assert(second > 0.05 && second < 2.0);
             assert(third > 0.01 && third < 2.0);
-            assert(fm_source.peekRegister(0x20 + voice) == 0xc4);
+            // RL=3, FB=5, ALG=4。FB無しでは倍音が立たずPSG的な音になる。
+            assert(fm_source.peekRegister(0x20 + voice) == 0xfc);
             const std::array<uint8_t, 4> multiples{1, 1, 2, 1};
             for (unsigned slot = 0; slot < 4; ++slot)
                 assert(fm_source.peekRegister(0x40 + voice + slot * 8) == multiples[slot]);
@@ -332,7 +333,8 @@ static void test_melody_timbre()
             for (unsigned slot = 0; slot < 4; ++slot)
             {
                 const bool modulator = trumpet && (slot == 0 || slot == 2);
-                const auto slot_level = modulator ? (slot == 0 ? 16 : 24) : expected;
+                // 変調器は音量に追従させず固定。TL=8 は金管の倍音を出すための深さ。
+                const auto slot_level = modulator ? 8 : expected;
                 assert(fm_source.peekRegister(0x60 + voice + slot * 8) == slot_level);
             }
         }

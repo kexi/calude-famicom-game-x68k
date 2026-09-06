@@ -58,12 +58,28 @@ static void set_voice(uint8_t ch, uint8_t algorithm, uint8_t attack, uint8_t dec
 
 static void set_trumpet_voice(void)
 {
-    // 2組のFMで金管風の倍音を作る。追加chで重ねるとCoreS3の合成負荷が増える。
+    // 2組のFM (ALG4) を深く変調してトランペットを作る。
+    //
+    // Why FB=7 と浅いTL: 以前は FB=0・変調器 TL=16/24 で、倍音が
+    // 第2=19%/第3=13% しか立たなかった。これは正弦波に近く、聴感は PSG の
+    // 矩形波に寄る (実機で「FM音源に聞こえない、PSGに聞こえる」との報告)。
+    // 自己帰還を最大にし変調器を TL=8 まで開けると、第2=116%/第3=61%/
+    // 第4=33% と倍音が減衰しながら並び、金管のスペクトルになる。
+    //
+    // Why not ALG0 (直列4段) にしないか: 段を重ねると倍音は増えるが、
+    // 実測では第2倍音が 4.6% まで落ちて基音と第3倍音だけが残る、
+    // 金管とは違う並びになった。ALG4 の2組を深く変調する方が近い。
     set_voice(VOICE_LEAD, 4, 31, 12, 0, 0x28, 0x01);
-    opm_write(0x60 + VOICE_LEAD, 16);
-    opm_write(0x60 + VOICE_LEAD + 2 * 8, 24);
+    opm_write(0x20 + VOICE_LEAD, (uint8_t)(0xC0 | (7u << 3) | 4u));
+
+    // TL は減衰量で 0 が最大。ALG4 は slot1/3 がキャリア、slot0/2 が変調器。
+    opm_write(0x60 + VOICE_LEAD + 0 * 8, 8);
+    opm_write(0x60 + VOICE_LEAD + 1 * 8, 0);
+    opm_write(0x60 + VOICE_LEAD + 2 * 8, 8);
+    opm_write(0x60 + VOICE_LEAD + 3 * 8, 0);
     opm_write(0x40 + VOICE_LEAD + 2 * 8, 0x02);
-    // 現OPMのalg4はslot1/3がキャリア。変調器より少し遅れて息が立ち上がる。
+
+    // キャリアは変調器より少し遅れて立ち上げる。息が入ってから鳴る感じになる。
     for (uint8_t op = 1; op < 4; op += 2)
     {
         const uint8_t slot = (uint8_t)(VOICE_LEAD + op * 8);
