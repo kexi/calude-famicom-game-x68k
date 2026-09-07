@@ -21,7 +21,10 @@ extern "C"
 #include "../platform/hw.h"
 }
 
-static constexpr uint32_t kSampleRate = 15625;
+// エミュレータ側の既定に合わせる (opm.h の kDefaultSampleRate)。
+// 15625Hz ではナイキストが 7812Hz しかなく、主旋律 (約1568Hz) の第5倍音以降が
+// 折り返して濁る。金管の倍音を出すにはレートが要る。
+static constexpr uint32_t kSampleRate = x68k::Opm::kDefaultSampleRate;
 static constexpr uint32_t kFrameNumerator = 5545;
 static constexpr uint32_t kFrameDenominator = 100;
 static x68k::Opm fm_source;
@@ -312,8 +315,8 @@ static void test_melody_timbre()
             assert(second > 0.05 && second < 2.0);
             assert(third > 0.01 && third < 2.0);
             // RL=3, FB=5, ALG=4。FB無しでは倍音が立たずPSG的な音になる。
-            assert(fm_source.peekRegister(0x20 + voice) == 0xfc);
-            const std::array<uint8_t, 4> multiples{1, 1, 2, 1};
+            assert(fm_source.peekRegister(0x20 + voice) == 0xfa);
+            const std::array<uint8_t, 4> multiples{0x32, 0x32, 0x76, 0x02};
             for (unsigned slot = 0; slot < 4; ++slot)
                 assert(fm_source.peekRegister(0x40 + voice + slot * 8) == multiples[slot]);
         }
@@ -332,9 +335,12 @@ static void test_melody_timbre()
             const auto expected = std::clamp(static_cast<int>(volume) - (trumpet ? 0 : 3), 0, 127);
             for (unsigned slot = 0; slot < 4; ++slot)
             {
-                const bool modulator = trumpet && (slot == 0 || slot == 2);
+                // ALG2 は C2 (slot3) だけがキャリア。
+                const bool modulator = trumpet && slot != 3;
                 // 変調器は音量に追従させず固定。TL=8 は金管の倍音を出すための深さ。
-                const auto slot_level = modulator ? 8 : expected;
+                // VOPM @:22 Trumpet の TL (OPM slot 順 M1,M2,C1,C2)。
+                static const int kTrumpetTl[4] = {25, 42, 32, 0};
+                const auto slot_level = modulator ? kTrumpetTl[slot] : expected;
                 assert(fm_source.peekRegister(0x60 + voice + slot * 8) == slot_level);
             }
         }
