@@ -672,7 +672,13 @@ static std::vector<uint16_t> render_lcd()
     return pixels;
 }
 
-static void assert_words(const std::vector<uint16_t> &words, bool direct)
+// sprites を渡すと、合成後の画素だけそれを重ねて比べる。
+//
+// Why 分けるか: ハードウェアスプライトは GVRAM に無く、合成のときだけ上に
+// 乗る。words[] へ混ぜると「GVRAM が words と一致する」検査の方が壊れる。
+// GVRAM は地形と背景だけ、合成後はそこへスプライトが乗った姿、と分けて見る。
+static void assert_words(const std::vector<uint16_t> &words, bool direct,
+                         const std::vector<uint16_t> *sprites = nullptr)
 {
     video_present();
     assert(machine.video().graphicColorMode() ==
@@ -681,7 +687,9 @@ static void assert_words(const std::vector<uint16_t> &words, bool direct)
     // 高色は graphic + text ($3F)。テキスト面を出すのは HUD の置き場所に
     // 使うためで、リング方式では GVRAM が横へ流れるので画面固定の HUD を
     // そこへ置けない (video.c の GRAPHIC_DISPLAY_DIRECT を見よ)。
-    assert(machine.video().displayControl() == (direct ? 0x3fu : 0x71u));
+    // 高色は graphic + text + sprite ($7F)。テキスト面は HUD、スプライト面は
+    // 人物に使う (video.c を見よ)。
+    assert(machine.video().displayControl() == (direct ? 0x7fu : 0x71u));
     const auto pixels = render_lcd();
     for (unsigned y = 0; y < 240; ++y)
         for (unsigned x = 0; x < 320; ++x)
@@ -696,7 +704,10 @@ static void assert_words(const std::vector<uint16_t> &words, bool direct)
             assert(actual == expected);
             const auto color =
                 direct ? expected : (expected ? machine.video().graphicPalette(expected) : 0);
-            assert(pixels[y * 320 + x] == x68k::VideoController::toRgb565(color));
+            // スプライトが乗る画素は、その色 (もう RGB565) をそのまま比べる。
+            const auto overlay = sprites != nullptr ? (*sprites)[y * 320 + x] : 0u;
+            const auto want = overlay != 0 ? overlay : x68k::VideoController::toRgb565(color);
+            assert(pixels[y * 320 + x] == want);
         }
 }
 
@@ -889,19 +900,33 @@ static void test_highcolor_title(const std::string &root)
     video_show_title();
 }
 
+// 人物はハードウェアスプライトで出る。PCG を引いてテキストパレットで色にする。
+//
+// Why not 高色のアクター画像から作らないか: 高色を GVRAM へ描いていたときは
+// それが正しかったが、リング方式では毎フレームの復元が高くつくので CYNTHIA へ
+// 移した (video.c の GRAPHIC_DISPLAY_DIRECT を見よ)。実際に出る色は PCG の
+// ニブルをテキストパレットで引いたものになる。
+//
+// 変換はエミュレータ自身の SpriteRaster::pcgPixel を使う。ニブルの並びを
+// テスト側で書き直すと、本体と食い違ったときに気づけない。
 static void overlay_expected_actor(std::vector<uint16_t> &words, int pattern, int x, int y,
                                    bool flip_x = false, bool flip_y = false)
 {
+    const uint8_t *vram = machine.sprite().vram();
     for (int sy = 0; sy < 16; ++sy)
         for (int sx = 0; sx < 16; ++sx)
         {
             const int px = x + sx, py = y + sy;
             const bool visible = px >= 0 && px < 320 && py >= 0 && py < 240;
             if (!visible) continue;
-            const auto color =
-                g_highcolor_actor_patterns[pattern - 64]
-                                          [(flip_y ? 15 - sy : sy) * 16 + (flip_x ? 15 - sx : sx)];
-            if (color) words[py * 320 + px] = color;
+            const auto index = x68k::SpriteRaster::pcgPixel(vram, (x68k::u32)pattern,
+                                                            (x68k::u32)(flip_x ? 15 - sx : sx),
+                                                            (x68k::u32)(flip_y ? 15 - sy : sy));
+            const bool opaque = index != x68k::SpriteRaster::kTransparentIndex;
+            // 合成後の色 (RGB565) をそのまま置く。0 は「スプライト無し」の印。
+            if (opaque)
+                words[py * 320 + px] =
+                    x68k::VideoController::toRgb565(machine.video().textPalette(index));
         }
 }
 
@@ -940,10 +965,12 @@ static void test_highcolor_stages(const std::string &root)
         video_put_player(120, 168, 0, VIDEO_POSE_STAND);
         video_put_enemy(0, 184, 184, ENEMY_WALKER, 0, 0, 0);
         auto expected = expected_stage(stage);
-        overlay_expected_actor(expected, 88, 184, 184);
-        overlay_expected_actor(expected, 65, 120, 184);
-        overlay_expected_actor(expected, 64, 120, 168);
-        assert_words(expected, true);
+        // スプライトは GVRAM に無いので、別の面に置いて合成後だけで比べる。
+        std::vector<uint16_t> sprites(kTitlePixels);
+        overlay_expected_actor(sprites, 88, 184, 184);
+        overlay_expected_actor(sprites, 65, 120, 184);
+        overlay_expected_actor(sprites, 64, 120, 168);
+        assert_words(expected, true, &sprites);
         capture_lcd(root + "/highcolor-stage-" + std::to_string(stage + 1) + ".ppm");
         capture_lcd(root + "/mode-1-stage-" + std::to_string(stage + 1) + ".ppm");
         // HUD はテキスト画面へ描く。

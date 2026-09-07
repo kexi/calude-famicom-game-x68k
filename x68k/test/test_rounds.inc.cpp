@@ -98,7 +98,7 @@ static void assert_round_frame(const std::vector<uint16_t> &expected_words, bool
     assert(machine.video().graphicColorMode() == expected_mode);
     // 高色は graphic + text ($3F)。テキスト面は HUD の置き場所に使う
     // (video.c の GRAPHIC_DISPLAY_DIRECT を見よ)。
-    const bool display_matches = machine.video().displayControl() == (direct ? 0x003Fu : 0x0071u);
+    const bool display_matches = machine.video().displayControl() == (direct ? 0x007Fu : 0x0071u);
     assert(display_matches);
     const auto pixels = render_lcd();
     const int safe_fade = std::clamp(fade, 0, 7);

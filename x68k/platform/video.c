@@ -48,13 +48,17 @@
 #define GRAPHIC_MODE_INDEXED 0x0000u
 #define GRAPHIC_MODE_DIRECT 0x0003u
 #define GRAPHIC_MODE_UNKNOWN 0xFFFFu
-// 高色 (65536色) の表示。グラフィック + テキスト。
+// 高色 (65536色) の表示。グラフィック + テキスト + スプライト。
 //
 // Why テキスト面も出すか: HUD は画面に固定された表示で、スクロールしない。
 // リング方式は GVRAM を 512 幅のリングとして横へ流すので、そこへ HUD を
 // 描くと一緒に流れてしまう。X68000 にはテキスト画面が別にあり、4bit 側は
 // 元からそちらへ HUD を描いている。高色側も同じ置き場所を使う。
-#define GRAPHIC_DISPLAY_DIRECT (0x001Fu | VC_DISPLAY_TEXT)
+//
+// Why スプライト面も出すか: 人物を GVRAM へ描くと、リングでは毎フレーム
+// 「戻して描き直す」ことになり 1 枚 約29,600 cycles かかっていた。CYNTHIA は
+// 128 枚を無料で重ねる。人物だけ 16 色になるが、背景と地形は高色のまま。
+#define GRAPHIC_DISPLAY_DIRECT (0x001Fu | VC_DISPLAY_TEXT | VC_DISPLAY_SPRITE)
 #define TITLE_LOGO_MAX_PIXELS 512
 #define TITLE_RIGHT_X 256
 #define TITLE_RIGHT_WIDTH 64
@@ -945,11 +949,7 @@ void video_set_scroll(int32_t scroll_x)
 // スプライト 1 個を置く。
 static void put_sprite(int index, int x, int y, int pattern, int hflip)
 {
-    if (highcolor_stage_active)
-    {
-        hc_sprite(index, x, y, pattern, hflip, 0);
-        return;
-    }
+    // 高色でもハードウェアスプライトを使う (上の load_actor_patterns を見よ)。
     const uint32_t base = SPR_REG_BASE + (uint32_t)index * 8u;
     poke16(base + 0, (uint16_t)(x + SPR_COORD_OFFSET));
     poke16(base + 2, (uint16_t)(y + SPR_COORD_OFFSET));
@@ -1019,12 +1019,6 @@ void video_put_arrow(int slot, int x, int y, int dir)
     const int hflip = (dir == 2);
     const int vflip = (dir == 4);
 
-    if (highcolor_stage_active)
-    {
-        hc_sprite(5 + slot, x, y, pattern, hflip, vflip);
-        return;
-    }
-
     const uint32_t base = SPR_REG_BASE + (uint32_t)(5 + slot) * 8u;
     poke16(base + 0, (uint16_t)(x + SPR_COORD_OFFSET));
     poke16(base + 2, (uint16_t)(y + SPR_COORD_OFFSET));
@@ -1054,11 +1048,6 @@ void video_put_boss(int x, int y, int flashing)
     {
         const int dx = (i & 1) * 16;
         const int dy = (i >> 1) * 16;
-        if (highcolor_stage_active)
-        {
-            hc_sprite(9 + i, flashing ? -64 : x + dx, flashing ? -64 : y + dy, PAT_BOSS + i, 0, 0);
-            continue;
-        }
         const uint32_t base = SPR_REG_BASE + (uint32_t)(9 + i) * 8u;
         poke16(base + 0, (uint16_t)(x + dx + SPR_COORD_OFFSET));
         poke16(base + 2, (uint16_t)(y + dy + SPR_COORD_OFFSET));
@@ -1108,18 +1097,25 @@ void video_set_stage(int stage)
 
     video_build_stage();
     hc_present();
-    // PCGとTVRAMを重ねず、地形・人物・文字も単一の直接色面へ合成する。
+    // 人物はハードウェアスプライトで出す。
+    //
+    // Why: リング方式では、スプライトを GVRAM へ描くと毎フレーム
+    // 「元に戻して描き直す」ことになる。1 枚あたり約 29,600 cycles で、
+    // 画面に十数枚出るので描画費用の主役になっていた。CYNTHIA は
+    // 128 枚を無料で重ねられる。4bit 側は元からこちらを使っている。
+    //
+    // Why not 高色のまま出せないか: PCG は 4bit (16色) しか持てない。
+    // 人物だけ 16 色になり、背景と地形は高色のまま残る。
+    load_actor_patterns();
+    // CYNTHIA のスプライト面を許可する。$E82600 の bit6 とは別の関門で、
+    // 両方立てないと出ない。BG (bit0) は使わない。地形はリングが GVRAM で持つ。
+    poke16(SPR_BG_CTRL, 0x0200u);
     poke16(VC_PRIORITY, 0x0104u);
     poke16(VC_DISPLAY, GRAPHIC_DISPLAY_DIRECT);
 }
 
 void video_hide_from(int first_index)
 {
-    if (highcolor_stage_active)
-    {
-        hc_hide_from(first_index);
-        return;
-    }
     // プライオリティ 0 は非表示。
     for (int i = first_index; i < 16; ++i)
     {
