@@ -133,12 +133,26 @@ int main(void)
     uint8_t player_animation_timer = 0;
     static uint8_t shown_coins[8];
 
+#ifdef CALUDE_FRAME_PROFILE
+// 1フレームの中でどこにゲストcycleが行くかを測る。bench_ring_guest.c と同じ番地。
+// メインRAMの空き番地を使う。I/O空間 ($EFF000) はこのbusが応答しない。
+#define PROF_BEGIN(phase) (*(volatile uint16_t *)0x00007F00u = (uint16_t)(phase))
+#define PROF_END() (*(volatile uint16_t *)0x00007F02u = 1)
+#else
+#define PROF_BEGIN(phase) ((void)0)
+#define PROF_END() ((void)0)
+#endif
+
     for (;;)
     {
+        PROF_BEGIN(1);
         const uint8_t buttons = input_read();
+        PROF_END();
 
         static SoundFrame sound;
+        PROF_BEGIN(2);
         game_update_with_sound(&game, buttons, &sound);
+        PROF_END();
         const int visual_mode_changed = game.visual_mode != shown_visual_mode;
         if (visual_mode_changed)
         {
@@ -213,6 +227,7 @@ int main(void)
             shown_coins[i] = game.coin_taken[i];
         }
 
+        PROF_BEGIN(3);
         const int32_t scroll = game_scroll(&game);
 
         wait_vsync();
@@ -307,11 +322,16 @@ int main(void)
 
         video_put_effect((int)(game.enemies.fx_x - scroll), game.enemies.fx_y,
                          game.enemies.fx_timer, game.enemies.kill_flash);
+        PROF_END();
 
         // 音は絵と同じタイミングで反映する。
+        PROF_BEGIN(4);
         audio_commit(&sound);
+        PROF_END();
 
+        PROF_BEGIN(5);
         hud_draw(&game);
+        PROF_END();
 
         // 自動検証用の 1 行。HUD のすぐ上に出す。
         //
@@ -320,6 +340,8 @@ int main(void)
 #if CALUDE_DEBUG_HUD
         hud_debug_line(&game);
 #endif
+        PROF_BEGIN(6);
         video_present();
+        PROF_END();
     }
 }
