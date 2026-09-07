@@ -139,24 +139,7 @@ static void put_char(int col, int row, char c)
         if (unchanged) return;
     }
 
-    const int direct = video_is_highcolor_stage();
-    if (direct)
-    {
-        uint8_t upper[8] = {0}, lower[8] = {0};
-        for (int y = 0; y < 7; ++y)
-        {
-            const int in_upper = y < 4;
-            if (in_upper)
-                upper[y + 4] = (uint8_t)(kGlyphs[index][y] << 2);
-            else
-                lower[y - 4] = (uint8_t)(kGlyphs[index][y] << 2);
-        }
-        hc_glyph(col * 8, row * 16, upper, 3);
-        hc_glyph(col * 8, row * 16 + 8, lower, 3);
-        if (cacheable) debug_glyphs[col] = (uint8_t)(index + 1);
-        return;
-    }
-
+    // 高色でも TVRAM へ描く (nes_char と同じ理由)。
     const uint32_t base = TVRAM + (uint32_t)row * 16u * TVRAM_BYTES_PER_LINE + (uint32_t)col;
     for (int y = 0; y < 16; ++y)
     {
@@ -246,12 +229,12 @@ static void nes_char(int x, int y, char c, int color)
     const int overlaps_debug = y < 16 && y + 8 > 0;
     if (overlaps_debug) invalidate_debug_line();
     const int index = c >= 32 && c < 96 ? c - 32 : 0;
-    const int direct = video_is_highcolor_stage();
-    if (direct)
-    {
-        hc_glyph(x, y, g_nes_font[index], color);
-        return;
-    }
+    // 高色でも TVRAM へ描く。
+    //
+    // Why not hc_glyph へ逸らさないか: リング方式では GVRAM が横へ流れるので、
+    // 画面固定の HUD をそこへ置くと一緒に流れる。テキスト画面は流れないので
+    // 4bit と同じ経路が使える。表示許可はテキスト面も出すようにしてある
+    // (video.c の GRAPHIC_DISPLAY_DIRECT)。
     const int shift = x & 7;
     const uint8_t left_mask = (uint8_t)(0xffu >> shift);
     const int split_byte = shift != 0;

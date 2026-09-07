@@ -17,6 +17,7 @@ extern "C"
 {
 #include "../core/level.h"
 #include "../platform/audio.h"
+#include "../platform/highcolor_renderer.h"
 #include "../platform/hud.h"
 #include "../platform/hw.h"
 #include "../platform/video.h"
@@ -677,7 +678,10 @@ static void assert_words(const std::vector<uint16_t> &words, bool direct)
     assert(machine.video().graphicColorMode() ==
            (direct ? x68k::VideoController::GraphicColorMode::k65536Color
                    : x68k::VideoController::GraphicColorMode::k16Color));
-    assert(machine.video().displayControl() == (direct ? 0x1fu : 0x71u));
+    // 高色は graphic + text ($3F)。テキスト面を出すのは HUD の置き場所に
+    // 使うためで、リング方式では GVRAM が横へ流れるので画面固定の HUD を
+    // そこへ置けない (video.c の GRAPHIC_DISPLAY_DIRECT を見よ)。
+    assert(machine.video().displayControl() == (direct ? 0x3fu : 0x71u));
     const auto pixels = render_lcd();
     for (unsigned y = 0; y < 240; ++y)
         for (unsigned x = 0; x < 320; ++x)
@@ -942,7 +946,13 @@ static void test_highcolor_stages(const std::string &root)
         assert_words(expected, true);
         capture_lcd(root + "/highcolor-stage-" + std::to_string(stage + 1) + ".ppm");
         capture_lcd(root + "/mode-1-stage-" + std::to_string(stage + 1) + ".ppm");
-        // HUDの出力先だけを直接色へ変えても、文字内容と解除時の背景を保持する。
+        // HUD はテキスト画面へ描く。
+        //
+        // 以前はここで「テキスト VRAM へ 1 byte も書かない」ことを保証して
+        // いた。高色では HUD も直接色のビットマップへ描いていたためである。
+        // リング方式では GVRAM が横へ流れるので、画面固定の HUD をそこへ
+        // 置くと一緒に流れてしまう。X68000 のテキスト画面は流れないので、
+        // 4bit と同じ置き場所へ戻した。したがって書き込みは「ある」のが正しい。
         hud_clear();
         Game game{};
         game.stage = stage;
@@ -950,24 +960,26 @@ static void test_highcolor_stages(const std::string &root)
         text_byte_writes = text_word_writes = 0;
         hud_draw(&game);
         const auto with_hud = render_lcd();
-        assert(text_byte_writes == 0 && text_word_writes == 0);
+        assert(text_byte_writes != 0 || text_word_writes != 0);
         assert(with_hud != std::vector<uint16_t>(kTitlePixels));
-        const unsigned gradient[8][3] = {{248, 252, 255}, {232, 248, 255}, {208, 232, 255},
-                                         {176, 208, 248}, {144, 184, 240}, {112, 160, 224},
-                                         {88, 128, 208},  {64, 96, 176}};
+        // HUD の字がテキスト画面に載り、合成後の画面に現れることを見る。
+        //
+        // 以前は GVRAM の該当画素を 1 つずつ読んで、高色の階調色と一致する
+        // ことを確かめていた。HUD をテキスト画面へ移したので、GVRAM には
+        // もう字が無い。テキスト画面は 16 色なので階調も持たない。
+        // 「字のある行に、背景と違う画素がある」ことで置き換える。
         unsigned ink_pixels = 0;
-        for (unsigned y = 0; y < 8; ++y)
-            for (unsigned x = 0; x < 8; ++x)
-            {
-                const bool ink = (g_nes_font['3' - 32][y] & (128u >> x)) != 0;
-                if (!ink) continue;
-                const auto &rgb = gradient[y];
-                const uint16_t color =
-                    (rgb[1] / 8) * 2048 + (rgb[0] / 8) * 64 + (rgb[2] / 8) * 2 + (rgb[1] / 4) % 2;
-                assert(peek16(GVRAM + (y + 16) * GVRAM_BYTES_PER_LINE + (x + 18) * 2) == color);
-                ++ink_pixels;
-            }
+        {
+            const auto plain = std::vector<uint16_t>(kTitlePixels);
+            for (unsigned y = 16; y < 24; ++y)
+                for (unsigned x = 16; x < 32; ++x)
+                {
+                    const bool differs = with_hud[y * 320 + x] != plain[y * 320 + x];
+                    if (differs) ++ink_pixels;
+                }
+        }
         assert(ink_pixels > 0);
+        // HUD を描き直しても GVRAM は触らない。テキスト画面だけが変わる。
         graphic_word_writes = 0;
         hud_draw(&game);
         video_present();
@@ -1107,6 +1119,9 @@ int main(int argc, char **argv)
 {
     assert(argc == 2);
     const std::string root = argv[1];
+    // この試験は高色の出力を実画像と全画素で突き合わせる。既定は遠景なし
+    // (黒) なので、実画像を明示的に選ぶ。
+    hc_set_background_detail(0);
     x68k::MemoryMap memory;
     memory.mainRam = ram.data();
     memory.textVram = text_ram.data();

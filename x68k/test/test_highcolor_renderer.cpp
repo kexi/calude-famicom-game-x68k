@@ -118,6 +118,9 @@ void reset(int background)
     reference = {};
     reference.background = background;
     hc_reset(backgrounds[background], actors, terrain);
+    // この試験は実画像との全画素一致を見る。既定は遠景なし (黒) なので、
+    // 実画像を明示的に選ぶ。既定側は実機のゲスト速度のための設定である。
+    hc_set_background_detail(0);
     check(true);
 }
 

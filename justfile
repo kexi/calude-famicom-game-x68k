@@ -59,7 +59,7 @@ build-hello:
 #
 # core/ はプラットフォーム非依存、platform/ が X68000 のハードを叩く。
 # アセットは tools/ が生成した .inc.c を混ぜる。
-game_srcs := "x68k/platform/crt0.S x68k/platform/main.c x68k/platform/video.c x68k/platform/highcolor_renderer.c x68k/platform/input.c x68k/core/level.c x68k/core/player.c x68k/core/enemy.c x68k/core/arrow.c x68k/core/item.c x68k/core/boss.c x68k/core/game.c x68k/core/sound.c x68k/platform/audio.c x68k/platform/hud.c x68k/assets/levels.inc.c x68k/assets/sprites.inc.c x68k/assets/title_highcolor.inc.c x68k/assets/stage_highcolor.inc.c x68k/assets/foreground_highcolor.inc.c"
+game_srcs := "x68k/platform/crt0.S x68k/platform/main.c x68k/platform/video.c x68k/platform/highcolor_ring.c x68k/platform/highcolor_shim.c x68k/platform/input.c x68k/core/level.c x68k/core/player.c x68k/core/enemy.c x68k/core/arrow.c x68k/core/item.c x68k/core/boss.c x68k/core/game.c x68k/core/sound.c x68k/platform/audio.c x68k/platform/hud.c x68k/assets/levels.inc.c x68k/assets/sprites.inc.c x68k/assets/title_highcolor.inc.c x68k/assets/stage_highcolor.inc.c x68k/assets/foreground_highcolor.inc.c"
 
 [doc('アセット (レベル・フォント) を生成する')]
 assets:

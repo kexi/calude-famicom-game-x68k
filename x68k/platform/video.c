@@ -48,7 +48,13 @@
 #define GRAPHIC_MODE_INDEXED 0x0000u
 #define GRAPHIC_MODE_DIRECT 0x0003u
 #define GRAPHIC_MODE_UNKNOWN 0xFFFFu
-#define GRAPHIC_DISPLAY_DIRECT 0x001Fu
+// 高色 (65536色) の表示。グラフィック + テキスト。
+//
+// Why テキスト面も出すか: HUD は画面に固定された表示で、スクロールしない。
+// リング方式は GVRAM を 512 幅のリングとして横へ流すので、そこへ HUD を
+// 描くと一緒に流れてしまう。X68000 にはテキスト画面が別にあり、4bit 側は
+// 元からそちらへ HUD を描いている。高色側も同じ置き場所を使う。
+#define GRAPHIC_DISPLAY_DIRECT (0x001Fu | VC_DISPLAY_TEXT)
 #define TITLE_LOGO_MAX_PIXELS 512
 #define TITLE_RIGHT_X 256
 #define TITLE_RIGHT_WIDTH 64

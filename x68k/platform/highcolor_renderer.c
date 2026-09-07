@@ -19,20 +19,8 @@ typedef struct
 
 static const uint16_t (*scene_background)[HC_WIDTH];
 
-// 簡略背景: 1行1色。
-//
-// Why: 遠景は 320x240 の実画像で、毎フレーム dirty 範囲ぶんを読み出して
-// scratch へ写している。実機で背景を消すと描画 27.7->22.2ms、CPU 4,987->5,715kHz
-// (+15%) になったので、この読み出しが最も重い単一要素である。
-// 画像をそのまま持つと 1 行 320 word を読むが、遠景は横方向の変化が乏しい
-// (空と山の帯) ので、行の代表色 1 word で置き換えれば読み出しが 320 分の 1 になる。
-// 代表色は hc_reset のときに 1 度だけ作る。
-static uint16_t background_row_color[HC_HEIGHT];
-#ifdef CALUDE_SIMPLE_BACKGROUND
+// 既定で遠景を出さない。hc_set_background_detail(0) で実画像へ戻せる。
 static int background_simplified = 1;
-#else
-static int background_simplified;
-#endif
 static const uint16_t (*actor_patterns)[256];
 static const uint16_t (*terrain_patterns)[256];
 static uint16_t shadow[HC_HEIGHT][HC_WIDTH];
@@ -102,9 +90,6 @@ void hc_reset(const uint16_t background[HC_HEIGHT][HC_WIDTH],
               const uint16_t terrain[HC_TERRAIN_COUNT][256])
 {
     scene_background = background;
-    // 行の代表色を作る。中央付近を採るのは、左右端が枠や暗部になりがちで
-    // 行全体の印象からずれるため。
-    for (int y = 0; y < HC_HEIGHT; ++y) background_row_color[y] = background[y][HC_WIDTH / 2];
     actor_patterns = actors;
     terrain_patterns = terrain;
     scroll_x = 0;
@@ -411,16 +396,17 @@ void hc_present(void)
         const int right = dirty_right[y];
         const int clean = left >= right;
         if (clean) continue;
-#ifdef CALUDE_BENCH_NO_BACKGROUND
-        // 計測用: 遠景の読み出しを外し、背景合成の費用だけを切り分ける。
-        for (int x = left; x < right; ++x) scratch[x] = 0;
-#else
         if (background_simplified)
         {
-            // 行1色。読み出しが 1 word で済む。
-            const uint16_t color = background_row_color[y];
+            // 遠景を出さない。black。
+            //
+            // Why: 遠景は 320x240 の実画像で、dirty 範囲ぶんを毎フレーム
+            // 読み出して scratch へ写している。実機の 16bit high-color では
+            // ゲストが公称 10MHz の半分程度しか出ておらず、ゲームの進行が
+            // 実速の 5-6 割になっていた (敵の弾が遅い、横移動が紙芝居)。
+            // 遠景は描画の中で最も重い単一要素なので、まずここを落とす。
             uint16_t *out = &scratch[left];
-            for (int count = right - left; count > 0; --count) *out++ = color;
+            for (int count = right - left; count > 0; --count) *out++ = 0;
         }
         else
         {
@@ -428,7 +414,6 @@ void hc_present(void)
             uint16_t *out = &scratch[left];
             for (int count = right - left; count > 0; --count) *out++ = *bg++;
         }
-#endif
         compose_glyphs(y, left, right);
         compose_terrain(y, left, right);
         compose_sprites(y, left, right);
