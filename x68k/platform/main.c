@@ -229,9 +229,13 @@ int main(void)
 
         PROF_BEGIN(3);
         const int32_t scroll = game_scroll(&game);
+        PROF_END();
 
+        PROF_BEGIN(7);
         wait_vsync();
+        PROF_END();
 
+        PROF_BEGIN(3);
         video_set_scroll(scroll);
 
         if (is_static_scene)
