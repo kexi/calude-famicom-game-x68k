@@ -137,33 +137,6 @@ void hc_set_cell(int cx, int cy, int pattern)
     dirty_rect(x, cy * 16, 16, 16);
 }
 
-static void include_visible_terrain(int cy, int scroll, int *left, int *right)
-{
-    const int offset = scroll & 15;
-    const int first_column = scroll >> 4;
-    const int last = (HC_WIDTH + offset - 1) >> 4;
-    int first = 0;
-    for (; first <= last; ++first)
-    {
-        const int occupied = cells[cy][(first_column + first) & 63] != 0;
-        if (occupied) break;
-    }
-    const int empty_window = first > last;
-    if (empty_window) return;
-    int final = last;
-    for (; final > first; --final)
-    {
-        const int occupied = cells[cy][(first_column + final) & 63] != 0;
-        if (occupied) break;
-    }
-    const int window_left = first * 16 - offset;
-    const int window_right = (final + 1) * 16 - offset;
-    const int extends_left = window_left < *left;
-    const int extends_right = window_right > *right;
-    if (extends_left) *left = window_left;
-    if (extends_right) *right = window_right;
-}
-
 // 遠景を「行1色」へ落とすかを切り替える。既定は実画像 (0)。
 //
 // 切り替えたら全画面を描き直す。影バッファは前の色を覚えているので、
@@ -182,18 +155,55 @@ void hc_set_scroll(int scroll)
     const int next_scroll = (int)((unsigned int)scroll & 1023u);
     const int unchanged = scroll_x == next_scroll;
     if (unchanged) return;
-    // World-space flags must not dirty rows when both viewport positions miss
-    // them. Both old and new bounds are needed to erase terrain leaving view.
+
+    // 画面の位置ごとに「見えるものが変わったか」だけを dirty にする。
+    //
+    // Why not 行の左端〜右端をまとめて dirty にしないか: 地面は画面を
+    // 横断しているので、その範囲は実質行の全幅になる。1px 動いただけでも
+    // 毎フレーム画面の 20-50% を 4 層合成し直すことになり、横移動のときだけ
+    // 目に見えてカクついていた。実際に変わるのは「別のセルが現れた列」
+    // だけである。
+    //
+    // 判定は画素ではなくセル境界で行う。スクロール後に画面 x へ来る
+    // ワールド座標が、以前そこにあったものと同じセル内容かを比べ、違う列
+    // だけを dirty にする。地形は 16px セルなので、比較は 1 行 21 回で済む。
+    const int delta = next_scroll - scroll_x;
+    const int shifted = delta == 0;
+    if (shifted) return;
+
     for (int cy = 0; cy < HC_CELL_ROWS; ++cy)
     {
         const int contains_terrain = terrain_columns[cy] != 0;
         if (!contains_terrain) continue;
-        int left = HC_WIDTH;
-        int right = 0;
-        include_visible_terrain(cy, scroll_x, &left, &right);
-        include_visible_terrain(cy, next_scroll, &left, &right);
-        const int visible = left < right;
-        if (visible) dirty_rect(left, cy * 16, right - left, 16);
+
+        // 画面を跨ぐセル境界ごとに、前後で内容が変わるかを見る。
+        // 画面幅 320 は 16px セル 20 個ぶんで、両端の半端で 1 個増える。
+        int run_left = -1;
+        for (int x = 0; x < HC_WIDTH; x += 16)
+        {
+            // この画面位置に来るセルを、前と後それぞれで引く。
+            const int before = cells[cy][((x + scroll_x) & 1023) >> 4];
+            const int after = cells[cy][((x + next_scroll) & 1023) >> 4];
+            // セル内の位相がずれると、同じパターンでも絵が動く。
+            const int phase_before = (x + scroll_x) & 15;
+            const int phase_after = (x + next_scroll) & 15;
+            const int same = before == after && phase_before == phase_after;
+            if (!same)
+            {
+                const int starting = run_left < 0;
+                if (starting) run_left = x;
+                continue;
+            }
+            const int closing = run_left >= 0;
+            if (closing)
+            {
+                // 右隣のセルまで含める。境界を跨ぐ絵が半分だけ残らないように。
+                dirty_rect(run_left, cy * 16, x + 16 - run_left, 16);
+                run_left = -1;
+            }
+        }
+        const int trailing = run_left >= 0;
+        if (trailing) dirty_rect(run_left, cy * 16, HC_WIDTH - run_left, 16);
     }
     scroll_x = next_scroll;
 }
